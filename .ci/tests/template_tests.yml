@@ -1,0 +1,20 @@
+############################################################
+# Test jobs for the template's own CI configuration
+#
+# The rules on these jobs only match in the project_template
+# repository itself. In projects created from the template
+# the rules never match, so no jobs are added to their
+# pipelines and this file is inert.
+############################################################
+
+ci_validation_test:
+  stage: static_test
+  image: bash:5
+  rules:
+    # rules are OR'ed (first match wins), so this guard must come first to
+    # keep the job out of pipelines in projects created from the template
+    - if: '$CI_PROJECT_PATH != "sam-xl/project_template"'
+      when: never
+    - !reference [.if_default_branch_or_merge_request, rules]
+  script:
+    - bash .ci/tests/ci_validation_test.sh

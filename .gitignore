@@ -1,0 +1,33 @@
+# Object files
+*.slo
+*.lo
+*.o
+
+# Libraries
+*.lib
+*.a
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Other ROS stuff
+CATKIN_IGNORE*
+
+# VSCode
+.vscode/
+
+# Local CI cache
+.gitlab-ci-local/
+.ci_cache/
+
+# Other
+*.pcd
+*.pyc

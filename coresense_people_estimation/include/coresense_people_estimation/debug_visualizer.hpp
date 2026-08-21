@@ -16,9 +16,11 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
+#include "geometry_msgs/msg/vector3.hpp"
 #include "people_msgs/msg/people.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/transform_broadcaster.hpp"
@@ -30,8 +32,10 @@ namespace coresense_people_estimation
 /// Draws what the pipeline computed, so the geometry can be checked by eye.
 ///
 /// The output topic carries plausible-looking numbers whether or not the depth
-/// read and the velocity fit are right; markers in RViz are what tell the two
-/// apart. See the README.
+/// read, the velocity fit and the map transform are right; markers in RViz are
+/// what tell them apart. The transformed output and the raw sensor-frame input
+/// are drawn together deliberately: where the two disagree localises the fault.
+/// See the README.
 ///
 /// Not a node: it declares its parameters on the owning node and publishes
 /// through it. Off is genuinely off — with `debug` false neither the marker
@@ -39,12 +43,33 @@ namespace coresense_people_estimation
 class DebugVisualizer
 {
 public:
-  explicit DebugVisualizer(rclcpp::Node& node);
+  /// `gravity_aligned` says which convention the people handed to `publish`
+  /// follow: true for a z-up target frame, false for the sensor's optical frame.
+  /// Only the heading of a person's TF frame depends on it.
+  DebugVisualizer(rclcpp::Node& node, bool gravity_aligned);
+
+  /// The robot's own velocity, drawn from the point it turns about. This is the
+  /// vector the map transform added to every person, so an arrow pointing the
+  /// wrong way explains every wrong person velocity at once.
+  struct RobotArrow
+  {
+    geometry_msgs::msg::Vector3 origin;
+    geometry_msgs::msg::Vector3 linear;
+  };
+
+  /// True when the untransformed input is worth keeping a copy of, so the
+  /// caller pays for that copy only when someone is looking.
+  bool showsRaw() const
+  {
+    return debug_ && debug_show_raw_;
+  }
 
   /// Draws one frame's worth of geometry: a sphere, a look-ahead arrow and a
-  /// label per person, in whatever frame `people` carries. No-op unless `debug`
-  /// is set.
-  void publish(const people_msgs::msg::People& people);
+  /// label per person in `people`, the untransformed `raw` alongside in its own
+  /// sensor frame, and the robot velocity that turned one into the other. No-op
+  /// unless `debug` is set.
+  void publish(const people_msgs::msg::People& people, const people_msgs::msg::People& raw,
+               const std::optional<RobotArrow>& robot);
 
 private:
   /// Broadcasts one TF frame per person, positioned at their position and yawed
@@ -61,9 +86,16 @@ private:
   /// Clock, logger, parameters and publishers all come from it.
   rclcpp::Node& node_;
 
+  // ── Injected by the owning node ───────────────────────────────────────────
+  /// Set when the map transform is on, so published people are z-up rather than
+  /// in the optical frame. Decided once at construction: `target_frame` is not
+  /// re-read per message.
+  const bool gravity_aligned_;
+
   // ── Parameters ────────────────────────────────────────────────────────────
   bool debug_;
   bool debug_person_frames_;
+  bool debug_show_raw_;
   /// Seconds of look-ahead an arrow represents: its length is speed * this, so
   /// at 1.0 the tip sits where the person would be one second from now.
   double debug_velocity_scale_;

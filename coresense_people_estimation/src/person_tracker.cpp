@@ -49,17 +49,17 @@ namespace coresense_people_estimation
 PersonTracker::PersonTracker(rclcpp::Node& node)
   : node_(node)
 {
-  velocity_prior_variance_ = node.declare_parameter<double>("velocity_prior_variance", 1.0);
+  velocity_prior_variance_ = node_.declare_parameter<double>("velocity_prior_variance", 1.0);
 
-  velocity_window_max_s_ = node.declare_parameter<double>("velocity_window_max_s", 2.0);
-  velocity_window_min_s_ = node.declare_parameter<double>("velocity_window_min_s", 0.6);
-  velocity_window_chi2_max_ = node.declare_parameter<double>("velocity_window_chi2_max", 3.0);
-  velocity_window_sigma_scale_ = node.declare_parameter<double>("velocity_window_sigma_scale", 0.25);
-  velocity_gait_sigma_m_ = node.declare_parameter<double>("velocity_gait_sigma_m", 0.03);
-  velocity_min_span_s_ = node.declare_parameter<double>("velocity_min_span_s", 0.3);
-  velocity_epsilon_ = node.declare_parameter<double>("velocity_epsilon", 0.05);
-  velocity_max_gap_s_ = node.declare_parameter<double>("velocity_max_gap_s", 0.5);
-  const auto declared_maxlen = node.declare_parameter<std::int64_t>("history_maxlen", 60);
+  velocity_window_max_s_ = node_.declare_parameter<double>("velocity_window_max_s", 2.0);
+  velocity_window_min_s_ = node_.declare_parameter<double>("velocity_window_min_s", 0.6);
+  velocity_window_chi2_max_ = node_.declare_parameter<double>("velocity_window_chi2_max", 3.0);
+  velocity_window_sigma_scale_ = node_.declare_parameter<double>("velocity_window_sigma_scale", 0.25);
+  velocity_gait_sigma_m_ = node_.declare_parameter<double>("velocity_gait_sigma_m", 0.03);
+  velocity_min_span_s_ = node_.declare_parameter<double>("velocity_min_span_s", 0.3);
+  velocity_epsilon_ = node_.declare_parameter<double>("velocity_epsilon", 0.05);
+  velocity_max_gap_s_ = node_.declare_parameter<double>("velocity_max_gap_s", 0.5);
+  const auto declared_maxlen = node_.declare_parameter<std::int64_t>("history_maxlen", 60);
   if (declared_maxlen < static_cast<std::int64_t>(kMinFitSamples))
   {
     RCLCPP_WARN(node_.get_logger(),
@@ -69,16 +69,16 @@ PersonTracker::PersonTracker(rclcpp::Node& node)
   history_maxlen_ = static_cast<std::size_t>(std::max(declared_maxlen, static_cast<std::int64_t>(kMinFitSamples)));
 
   // See parameters.hpp for why a count is not declared as a plain int64.
-  max_person_speed_ = node.declare_parameter<double>("max_person_speed", 2.5);
-  spike_reset_timeout_ = node.declare_parameter<double>("spike_reset_timeout", 1.0);
-  spike_max_holds_ = declareCount(node, "spike_max_holds", 5);
+  max_person_speed_ = node_.declare_parameter<double>("max_person_speed", 2.5);
+  spike_reset_timeout_ = node_.declare_parameter<double>("spike_reset_timeout", 1.0);
+  spike_max_holds_ = declareCount(node_, "spike_max_holds", 5);
 }
 
 TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
-                                  const Eigen::Vector3d& variance, double cumulative_yaw)
+                                  const Eigen::Matrix3d& covariance, double cumulative_yaw)
 {
   // A reading that implies an impossible speed is a depth error, not motion.
-  const FilteredPosition filtered = filterPosition(track_id, stamp, position, variance, cumulative_yaw);
+  const FilteredPosition filtered = filterPosition(track_id, stamp, position, covariance, cumulative_yaw);
 
   Track& track = tracks_[track_id];
 
@@ -105,12 +105,12 @@ TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const Eig
     track.last_window_s = window_s;
   }
 
-  return TrackUpdate{ filtered.position, filtered.variance, filtered.hold_frames, fit, window_s };
+  return TrackUpdate{ filtered.position, filtered.covariance, filtered.hold_frames, fit, window_s };
 }
 
 PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track_id, double stamp,
                                                               const Eigen::Vector3d& position,
-                                                              const Eigen::Vector3d& variance, double cumulative_yaw)
+                                                              const Eigen::Matrix3d& covariance, double cumulative_yaw)
 {
   // Accepting a reading is also what feeds the velocity fit, so a spike never
   // becomes a sample and a hold never becomes a stationary one.
@@ -118,18 +118,16 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
     state.stamp = stamp;
     state.seen_stamp = stamp;
     state.position = position;
-    state.variance = variance;
+    state.covariance = covariance;
     state.cumulative_yaw = cumulative_yaw;
     state.consecutive_holds = 0;
-    // A gap wide enough that this may not be the same person clears the history
-    // rather than having a slope fitted across it.
     pruneHistory(state.history, stamp);
-    state.history.push_back(Sample{ stamp, position, variance, cumulative_yaw });
+    state.history.push_back(Sample{ stamp, position, covariance.diagonal(), covariance(0, 2), cumulative_yaw });
     while (state.history.size() > history_maxlen_)
     {
       state.history.pop_front();
     }
-    return FilteredPosition::measured(position, variance);
+    return FilteredPosition::measured(position, covariance);
   };
 
   // This reading is not a successor of the stored one, so every sample in front of
@@ -202,9 +200,9 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
   ++state.consecutive_holds;
   RCLCPP_DEBUG(node_.get_logger(), "Holding track %d at its previous position (%.1f m/s implied, hold %zu)", track_id,
                speed, state.consecutive_holds);
-  // The stored variance, not this frame's: the measured one is centred on the
+  // The stored covariance, not this frame's: the measured one is centred on the
   // reading just rejected. See the README.
-  return FilteredPosition::held(state.position, state.variance, state.consecutive_holds);
+  return FilteredPosition::held(state.position, state.covariance, state.consecutive_holds);
 }
 
 VelocityFit PersonTracker::priorFit() const
@@ -281,8 +279,9 @@ double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const Ve
   coefficients << fit.velocity.transpose(), fit.intercept.transpose();
   const Eigen::MatrixX3d residual = positions(window) - designMatrix(window) * coefficients;
 
-  // Residuals are judged against frame-to-frame repeatability rather than the
-  // absolute position error, with gait as the floor under it. See the README.
+  // Residuals are judged against repeatability rather than the localisation
+  // uncertainty the uncertainty model reports, with gait as the floor under it.
+  // See the README.
   const double gait_var = velocity_gait_sigma_m_ * velocity_gait_sigma_m_;
   const double sigma_scale_sq = velocity_window_sigma_scale_ * velocity_window_sigma_scale_;
   Eigen::MatrixX3d variance(window.size(), 3);
@@ -305,12 +304,19 @@ std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sampl
   const double yaw_now = rotated.back().cumulative_yaw;
   for (Sample& sample : rotated)
   {
-    const Eigen::Matrix3d rotation = yawRotation(yaw_now - sample.cumulative_yaw);
-    sample.position = rotation * sample.position;
-    // The uncertainty turns with the point. The variances are per-axis, so the
-    // x-z cross-covariance the turn creates is dropped again — exact only while
-    // it is negligible. See the README.
-    sample.variance = (rotation * sample.variance.asDiagonal() * rotation.transpose()).diagonal();
+    const double angle = yaw_now - sample.cumulative_yaw;
+    sample.position = yawRotation(angle) * sample.position;
+
+    // The uncertainty turns with the point: yawRotation is Ry, so only the x-z
+    // block moves and y is untouched. See the README.
+    const double c = std::cos(angle);
+    const double s = std::sin(angle);
+    const double xx = sample.variance[0];
+    const double zz = sample.variance[2];
+    const double xz = sample.covariance_xz;
+    sample.variance[0] = c * c * xx + 2.0 * c * s * xz + s * s * zz;
+    sample.variance[2] = s * s * xx - 2.0 * c * s * xz + c * c * zz;
+    sample.covariance_xz = (c * c - s * s) * xz + c * s * (zz - xx);
   }
   return rotated;
 }

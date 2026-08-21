@@ -29,8 +29,11 @@ add_library(${PROJECT_NAME}_component
   src/debug_visualizer.cpp
   src/depth_reader.cpp
   src/people_estimation_node.cpp
+  src/people_map_transform.cpp
   src/person_tracker.cpp
   src/plausibility_filter.cpp
+  src/track_coaster.cpp
+  src/uncertainty_model.cpp
 )
 target_compile_features(${PROJECT_NAME}_component PUBLIC cxx_std_17)
 target_include_directories(${PROJECT_NAME}_component

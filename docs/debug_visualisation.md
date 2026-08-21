@@ -1,36 +1,34 @@
 # Debug visualisation
 
-The geometry is invisible in the output topic — a wrong depth read and a wrong velocity model
-both produce plausible-looking numbers. `debug:=true` draws it instead, on
-`/people_estimation/debug_markers`. Add a **MarkerArray** display on that topic in RViz, with the
-fixed frame set to the **colour optical frame** (`camera_color_optical_frame`), since that is the
-frame everything is published in. Each group is its own namespace, toggleable under
-*Displays → People markers → Namespaces*:
+The transform is invisible in the output topic — a wrong TF chain and a wrong velocity model both
+produce plausible-looking numbers. `debug:=true` draws it instead, on
+`/people_estimation/debug_markers`. Add a **MarkerArray** display on that topic in RViz, fixed to
+`map`. Each group is its own namespace, toggleable under *Displays → People markers →
+Namespaces*:
 
-| Namespace | Appearance | Meaning |
-|---|---|---|
-| `people` | green spheres | Back-projected positions |
-| `velocity` | cyan arrows | Fitted velocities |
-| `label` | white text | `name \| speed` per person |
+| Namespace | Appearance | Frame | Meaning |
+|---|---|---|---|
+| `people` | green spheres | `target_frame` | Transformed positions |
+| `velocity` | cyan arrows | `target_frame` | Transformed velocities |
+| `label` | white text | `target_frame` | `name \| speed` per person |
+| `raw_people` | orange spheres | *colour optical frame* | The untransformed input |
+| `raw_velocity` | orange arrows | *colour optical frame* | The untransformed velocities |
+| `robot_velocity` | magenta arrow | `target_frame` | The `cmd_vel` used to compensate |
 
 Arrows are look-ahead vectors: length is speed × `debug_velocity_scale`, so at the default an
 arrow tip sits where that person would be one second from now. With `debug_person_frames` on,
-each person also gets a TF frame at their position, yawed along their velocity. Markers
+each person also gets a TF frame at their map position, yawed along their velocity. Markers
 expire after `debug_marker_lifetime`, so a stalled pipeline shows as everything vanishing rather
 than a frozen scene; people who leave are explicitly deleted. Off is genuinely off — neither the
 publisher nor the broadcaster is created.
 
-**Reading it.** Remember the frame is optical: x right, y down, z forward. A person 3 m in front
-of the camera sits at `z ≈ 3`, not `x ≈ 3`.
+**Reading it.** The two point clouds are the diagnostic — `raw_*` is what was measured,
+`people`/`velocity` is what the transform made of it.
 
-- **A person sits metres too far away** → the depth read landed on background, and the spike
-  filter did not catch it. Check that `depth_topic` is the *aligned* image, and watch
-  `depth_valid_frac` and `position_hold_frames` in the tags.
-- **A person on a poster is drawn** → the plausibility filter is not rejecting them.
-  `background_frac` in the tags is what it measured; compare it with
-  `background_min_far_frac`.
-- **Arrows jitter while somebody walks in a straight line** → the window is collapsing when it
-  should not. Set `publish_covariance_tags: true`; `velocity_window_s` in the tags then says how
-  long it actually is. Raise `velocity_window_chi2_max` or `velocity_gait_sigma_m`.
-- **A stationary person's arrow grows while the robot turns** → the yaw de-rotation is not
-  getting `/cmd_vel`.
+- **Positions disagree** → the TF chain is wrong. Suspect the source `frame_id`: detections must
+  be stamped in an **optical** frame (x right, y down, z forward), since positions come from
+  `projectPixelTo3dRay`. `camera_link` (x forward, y left, z up) rotates every pose 90°.
+- **Positions agree, velocities do not** → the compensation is wrong. Check the magenta arrow: it
+  should point where the robot is actually driving.
+- **A stationary person's green arrow grows as the robot turns** → `ω × r` is wrong, and the
+  error scales with range.

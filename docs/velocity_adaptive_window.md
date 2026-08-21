@@ -15,7 +15,7 @@ r_i  = p_i − (v·t_i + b)              residual: how far sample i sits off the
 ```
 
 `σ_i²` is **the denominator** — the variance each residual is judged against, per sample and per
-axis. `σ_pos,i` is that sample's position sigma from `positionVariance()`, `s` is
+axis. `σ_pos,i` is that sample's position sigma from `positionCovariance()`, `s` is
 `velocity_window_sigma_scale`, `σ_gait` is `velocity_gait_sigma_m`, and the `n − 2` is because the
 fit spent two degrees of freedom on `v` and `b`. So `χ²_ν ≈ 1` means the samples scatter about the
 line exactly as much as the noise model says they
@@ -28,16 +28,10 @@ samples. It is evaluated **per axis** with the largest of the three taken — po
 divides a one-axis manoeuvre by three, enough on its own to hide somebody stopping while walking
 across the view.
 
-`positionVariance()` is the Jacobian propagation of
-`P = ray · z` [[4]](https://arxiv.org/pdf/1705.06516), kept to its diagonal: `σu`/`σv` scale with
-the bounding box, and `σz` is the larger of the measured spread of the depth readings and the
-sensor noise floor `coeff · z²`. Nothing publishes it — it exists to be the denominator above,
-which is read one axis at a time, so the cross terms are not carried.
-
 Three details make the denominator work:
 
 * **The denominator is frame-to-frame noise, not absolute position error.**
-  `positionVariance()` answers "how far off could this person really be", and most of that is
+  `positionCovariance()` answers "how far off could this person really be", and most of that is
   `pixel_sigma_frac · bbox` — uncertainty about *where on the body* the anchor pixel sits. That
   offset is much the same every frame, so it shifts the whole track without adding scatter around
   a straight-line fit. Divide residuals by it and the fit always looks better than expected: the
@@ -57,22 +51,10 @@ Three details make the denominator work:
   over-counts `χ²_ν` by 2.2× at 0.5 rad of yaw. Stale `/cmd_vel` degrades to windows shortening
   during turns.
 
-Keeping the fit itself body-fixed is what lets a later stage take the robot's own motion out with
-a transport-theorem correction.
-
 A speed below `velocity_epsilon` publishes as exactly zero, since each person's debug TF frame is
-yawed to `atan2(vx, vz)` about optical −y. Below `velocity_min_span_s` of history there is no
-velocity at all, so a new or re-seeded track reports zero with `velocity_prior_variance`. A track
-unseen for longer than `velocity_max_gap_s` has its history cleared rather than a slope fitted
-across the hole. While the spike filter holds a position the last fitted velocity is republished
-with it — zero would assert the person stopped, which a rejected reading is no evidence of; held
-frames never enter the history, and a re-seed clears it rather than differentiating across the
-discontinuity.
-
-Velocity covariance comes from the fit itself, `Var(v) = σ²·[(AᵀA)⁻¹]₀₀` with
-`σ² = ‖Aβ − p‖²/(n−2)` [[1]](https://iate.oac.uncor.edu/~mario/materia/nr/numrec/f15-2.pdf);
-fewer than three samples fit exactly and report `velocity_prior_variance` instead. It is
-conditional on a window selected *because* it fits, so it is optimistically biased.
-`people_msgs/Person` has no covariance field, so it goes out as a `tagnames`/`tags` string pair,
-along with the sample count and window length, under `publish_covariance_tags` (off by default).
-The `depth_valid_frac` and `depth_spread_m` diagnostics are published either way.
+yawed along it — `atan2(vy, vx)` in a z-up `target_frame`, or `atan2(vx, vz)` about optical −y
+when the transform is off. Below `velocity_min_span_s` of history there is no velocity at all, so
+a new or re-seeded track reports zero with `velocity_prior_variance`. While the spike filter
+holds a position the last fitted velocity is republished with it — zero would assert the person
+stopped, which a rejected reading is no evidence of; held frames never enter the history, and a
+re-seed clears it rather than differentiating across the discontinuity.

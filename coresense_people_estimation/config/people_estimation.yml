@@ -9,7 +9,8 @@
     depth_topic: /camera/camera/aligned_depth_to_color/image_raw
     camera_info_topic: /camera/camera/color/camera_info
     cmd_vel_topic: /cmd_vel
-    # Output, in the colour optical frame relative to the robot.
+    # Output, re-framed into target_frame (see below); nav2's social layer
+    # listens here.
     people_topic: /people
     # Stamp pairing of detections and depth; same slop as riskam_node.
     sync_queue_size: 10
@@ -26,9 +27,9 @@
     depth_min_m: 0.1
     depth_max_m: 3.0
 
-    # ── Position noise ──────────────────────────────────────────────────────
-    # Per-sample position sigma, used only by the velocity window test (see
-    # the README). Not published.
+    # ── Uncertainty model ───────────────────────────────────────────────────
+    # Per-sample position sigma; feeds the velocity window test, the published
+    # covariance and reliability.
     #
     # Anchor pixel sigma, as a fraction of the bounding box size.
     pixel_sigma_frac: 0.25
@@ -78,7 +79,7 @@
     spike_reset_timeout: 1.0
 
     # Seconds after which the last cmd_vel counts as "robot stationary"; 0
-    # disables the check. Only used to de-rotate the window by camera yaw.
+    # disables the check.
     cmd_vel_timeout: 0.5
 
     # ── Confirmation ────────────────────────────────────────────────────────
@@ -113,10 +114,54 @@
     # on a fixed cycle.
     plausibility_reset_timeout: 2.0
 
+    # ── Coasting ────────────────────────────────────────────────────────────
+    # Carries a track the camera has lost forward on its last velocity, only
+    # while its extrapolated position stays outside the image.
+    #
+    # Seconds a lost track is carried forward. Too short opens a hole in the
+    # costmap when somebody is lost; too long plans around somebody who left.
+    # 0 disables coasting.
+    coast_max_s: 3.0
+    # Inset from the image edge for the in-view test, in metres at the person's
+    # range (0.25 is about half a body width). Wider than the image disables
+    # the test, which is the safe direction.
+    coast_in_view_margin_m: 0.25
+    # 1-sigma error on the held velocity, in m/s; published as the
+    # coast_position_sigma_m tag, scaled by the time coasted. Diagnostic only.
+    coast_process_sigma: 0.3
+
     # ── Output ──────────────────────────────────────────────────────────────
-    # Also publish velocity covariance, sample count and window length as
-    # tagnames/tags pairs. nav2 ignores them.
+    # Also publish the position and velocity covariances, sample count and
+    # window length as tagnames/tags pairs, in the colour optical frame. nav2
+    # ignores them.
     publish_covariance_tags: false
+    # `reliability` scales nav2's social Gaussian: the product of a valid-depth
+    # term, a keypoint-completeness term and a localisation term, each in [0, 1].
+    #
+    # Valid-depth fraction at which the depth term saturates.
+    reliability_valid_frac_full: 0.5
+    # Detected keypoints (of 17) at which the detection-quality term saturates.
+    reliability_keypoints_full: 8.0
+    # Position-covariance trace, in m^2, at which the localisation term is 0.5
+    # (~0.29 m sigma per axis).
+    reliability_sigma_scale: 0.25
+
+    # ── Map transform ───────────────────────────────────────────────────────
+    # World-fixed frame people are re-expressed in before publishing. Empty
+    # disables the transform (no TF listener; output in the colour optical
+    # frame, uncompensated) — an escape hatch for a rig with no TF tree.
+    target_frame: map
+    # Frame cmd_vel is expressed in; its origin is the centre of rotation.
+    robot_base_frame: base_link
+    # Seconds to block waiting for a TF at the message stamp. Also caps the
+    # pipeline latency, as it runs inside the detection callback.
+    transform_timeout: 0.1
+    # Fall back to the latest transform when the stamped lookup fails, instead
+    # of dropping the frame.
+    allow_latest_transform_fallback: true
+    # Drop messages that cannot be velocity-compensated (cmd_vel older than
+    # cmd_vel_timeout) instead of assuming the robot is stationary.
+    require_cmd_vel: false
 
     # ── Debug visualisation ─────────────────────────────────────────────────
     # Off creates no marker publisher or TF broadcaster. The launch file's
@@ -124,8 +169,12 @@
     debug: false
     # MarkerArray topic; "~/" resolves to /people_estimation/debug_markers.
     debug_topic: ~/debug_markers
-    # Broadcast one TF frame per person, yawed along their velocity.
+    # Broadcast one TF frame per person at their map position, yawed along
+    # their velocity.
     debug_person_frames: true
+    # Also draw the untransformed input in the colour optical frame: a position
+    # mismatch points at TF, a velocity-only mismatch at the compensation.
+    debug_show_raw: true
     # Arrow length = speed x this many seconds of look-ahead.
     debug_velocity_scale: 1.0
     # Person sphere radius in metres; arrow and text sizes scale with it.

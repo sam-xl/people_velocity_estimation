@@ -14,18 +14,23 @@
 
 #pragma once
 
-#include <Eigen/Core>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
 #include <optional>
+#include <vector>
 
 #include "coresense_people_estimation/confirmation_filter.hpp"
 #include "coresense_people_estimation/debug_visualizer.hpp"
 #include "coresense_people_estimation/depth_reader.hpp"
+#include "coresense_people_estimation/people_map_transform.hpp"
 #include "coresense_people_estimation/person_tracker.hpp"
 #include "coresense_people_estimation/plausibility_filter.hpp"
+#include "coresense_people_estimation/track_coaster.hpp"
+#include "coresense_people_estimation/uncertainty_model.hpp"
+#include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "image_geometry/pinhole_camera_model.hpp"
 #include "message_filters/subscriber.hpp"
@@ -47,11 +52,9 @@ namespace coresense_people_estimation
 /// This class is the plumbing: it pairs detections with depth, decodes the depth
 /// image, latches `camera_info` and `cmd_vel`, and assembles the output message.
 /// The metric work is delegated, one collaborator per README section — see
-/// `ConfirmationFilter`, `DepthReader`, `PlausibilityFilter`, `PersonTracker`
-/// and `DebugVisualizer`.
-///
-/// Positions and velocities are in the **colour optical frame** and relative to
-/// the robot: nothing here re-frames them or takes the robot's own motion out.
+/// `DepthReader`, `PlausibilityFilter`, `UncertaintyModel`, `PersonTracker`, and
+/// finally `PeopleMapTransform`, which re-frames the result into `target_frame`.
+/// `DebugVisualizer` draws whatever comes out the far end.
 class PeopleEstimationNode : public rclcpp::Node
 {
 public:
@@ -69,25 +72,19 @@ private:
   void cmdVelCallback(const geometry_msgs::msg::Twist::ConstSharedPtr& msg);
 
   /// The latched `cmd_vel`, or `std::nullopt` when it is missing or older than
-  /// `cmd_vel_timeout_`. Dead-reckons the camera yaw the velocity window is
-  /// judged in.
+  /// `cmd_vel_timeout_`. Shared by the yaw integration and the map transform.
   std::optional<geometry_msgs::msg::Twist> latestCmdVel();
+
+  /// True when a point in the published frame falls inside the camera image, at a
+  /// range the pipeline could have detected somebody at. Feeds `TrackCoaster::coast()`.
+  bool inCameraView(const geometry_msgs::msg::Point& position,
+                    const geometry_msgs::msg::TransformStamped& target_to_camera);
 
   // ── Per-detection pipeline ────────────────────────────────────────────────
 
   /// Depth in metres from the incoming image, or `std::nullopt` when the encoding
   /// is unsupported or `cv_bridge` refuses it. Warns, throttled, on the way out.
   std::optional<cv::Mat> decodeDepth(const sensor_msgs::msg::Image::ConstSharedPtr& depth_image);
-
-  /// Per-axis position variance of one back-projected detection, in m^2.
-  ///
-  /// The diagonal of the Jacobian propagation of `P = ray * z`: the anchor pixel
-  /// is uncertain by a fraction of the bounding box, and the depth by the larger
-  /// of its measured spread and the sensor noise floor. Only the velocity
-  /// window's consistency test reads it, and that test is per axis, so the
-  /// cross terms are not carried. See the README.
-  Eigen::Vector3d positionVariance(const cv::Point3d& ray, const DepthEstimate& depth, double bbox_width,
-                                   double bbox_height, double fx, double fy) const;
 
   /// One detection, all the way to a `Person` — or `std::nullopt` when it has not
   /// confirmed, the depth is unusable, or the plausibility filter rejects it.
@@ -113,7 +110,13 @@ private:
   std::unique_ptr<ConfirmationFilter> confirmer_;
   std::unique_ptr<DepthReader> depth_reader_;
   std::unique_ptr<PlausibilityFilter> plausibility_;
+  std::unique_ptr<UncertaintyModel> uncertainty_;
   std::unique_ptr<PersonTracker> tracker_;
+  /// Re-frames the output into `target_frame`. Owns the TF buffer and listener.
+  std::unique_ptr<PeopleMapTransform> map_transform_;
+  /// Runs after the map transform: works on the re-framed output, so a coasted
+  /// person is extrapolated in a world-fixed frame. See the README.
+  std::unique_ptr<TrackCoaster> coaster_;
   /// Runs last, on the message that is about to be published.
   std::unique_ptr<DebugVisualizer> debug_;
 
@@ -143,15 +146,9 @@ private:
 
   double depth_min_m_;
   double depth_max_m_;
+  double coast_in_view_margin_m_;
   rclcpp::Duration cmd_vel_timeout_{ 0, 0 };
   bool publish_covariance_tags_;
-
-  /// Pixel sigma of the anchor point, as a fraction of the bounding box size.
-  double pixel_sigma_frac_;
-  double depth_spread_gain_;
-  /// Quadratic coefficient of the RealSense depth noise model, sigma_z ~ c*z^2.
-  /// https://dev.intelrealsense.com/docs/tuning-depth-cameras-for-best-performance
-  double depth_noise_coeff_;
 };
 
 }  // namespace coresense_people_estimation

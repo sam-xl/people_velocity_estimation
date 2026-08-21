@@ -25,10 +25,12 @@ find_package(visualization_msgs REQUIRED)
 
 add_library(${PROJECT_NAME}_component
   SHARED
+  src/confirmation_filter.cpp
   src/debug_visualizer.cpp
   src/depth_reader.cpp
   src/people_estimation_node.cpp
   src/person_tracker.cpp
+  src/plausibility_filter.cpp
 )
 target_compile_features(${PROJECT_NAME}_component PUBLIC cxx_std_17)
 target_include_directories(${PROJECT_NAME}_component
@@ -70,9 +72,10 @@ install(
 
 install(DIRECTORY include/ DESTINATION include)
 
-# Bench tooling: bag_camera_shim.py fills in a colour camera_info a replay may
-# not carry.
-install(PROGRAMS scripts/bag_camera_shim.py DESTINATION lib/${PROJECT_NAME})
+# Bench tooling: dummy_tf.py fakes the whole TF tree a localisation stack and a
+# robot description normally provide; bag_camera_shim.py fills in a colour
+# camera_info a replay may not carry.
+install(PROGRAMS scripts/bag_camera_shim.py scripts/dummy_tf.py DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME}/)
 

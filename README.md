@@ -2,8 +2,10 @@
 
 ## Overview
 
-Turns 2-D person detections into `people_msgs/People`: samples depth under each detection,
-back-projects it through the camera model, and fits a velocity over a short per-track history.
+Turns 2-D person detections into `people_msgs/People`: withholds a detection until it has
+persisted, samples depth under each detection, rejects people printed on posters and screens,
+back-projects the rest through the camera model, and fits a velocity over a short per-track
+history.
 
 Input is [`riskam_msgs/PersonDetections`](https://github.com/sam-xl/risk-awareness-module)
 from [RiskAM](https://github.com/sam-xl/risk-awareness-module)'s
@@ -111,8 +113,9 @@ close enough to trust a number from. Takes `--help`.
 
 Also available as the composable component `coresense_people_estimation::PeopleEstimationNode`.
 
-Reads a depth for each detection, back-projects it and fits a velocity over an adaptive
-per-track window; each stage is described in [`docs/`](./docs/index.md).
+Confirms each detection has persisted, reads its depth, rejects posters and depth spikes,
+back-projects it and fits a velocity over an adaptive per-track window; each stage is described
+in [`docs/`](./docs/index.md).
 
 #### Parameters
 
@@ -123,8 +126,8 @@ which documents every parameter inline.
 
 * `/people` ([people_msgs/People](https://github.com/wg-perception/people))\
   Positions and velocities in the **colour optical frame**, relative to the robot.
-  Per-person depth diagnostics ride along in `tagnames`/`tags`, joined by the window and
-  velocity-covariance numbers under `publish_covariance_tags`.
+  Per-person depth, hold and background diagnostics ride along in `tagnames`/`tags`, joined by
+  the window and velocity-covariance numbers under `publish_covariance_tags`.
 * `/people_estimation/debug_markers` ([visualization_msgs/MarkerArray](https://docs.ros2.org/latest/api/visualization_msgs/msg/MarkerArray.html))\
   Debug geometry, only under `debug`. See [Debug visualisation](./docs/debug_visualisation.md).
 * `/tf` ([tf2_msgs/TFMessage](https://docs.ros2.org/latest/api/tf2_msgs/msg/TFMessage.html))\
@@ -134,12 +137,12 @@ which documents every parameter inline.
 
 * `/riskam/person_detections` ([riskam_msgs/PersonDetections](https://github.com/sam-xl/risk-awareness-module))\
   Bounding boxes, ByteTrack ids and COCO-17 keypoints, stamped in the colour optical frame.
-  A detection ByteTrack did not associate arrives as `track_id: -1`; those share one id, so they
-  are published as measured and stationary rather than given a history.
+  A detection is ignored until its id has been seen `confirm_frames` frames running, and one
+  carrying no id at all (`track_id: -1`) is dropped; see [Confirmation](./docs/confirmation.md).
 * `/camera/camera/aligned_depth_to_color/image_raw` ([sensor_msgs/Image](https://docs.ros2.org/latest/api/sensor_msgs/msg/Image.html))\
   `16UC1` millimetres or `32FC1` metres. Paired with the detections by stamp.
   **Must be registered to the colour frame** — needs `align_depth.enable: true` on the driver.
-  `/camera/camera/depth/image_rect_raw` is the wrong image; see [Depth read-out](./docs/depth_readout.md).
+  `/camera/camera/depth/image_rect_raw` is the wrong image; see [Plausibility](./docs/plausibility.md).
 * `/camera/camera/color/camera_info` ([sensor_msgs/CameraInfo](https://docs.ros2.org/latest/api/sensor_msgs/msg/CameraInfo.html))\
   Intrinsics for the back-projection. Nothing is published until this arrives.
 * `/cmd_vel` ([geometry_msgs/Twist](https://docs.ros2.org/latest/api/geometry_msgs/msg/Twist.html))\
@@ -149,8 +152,8 @@ which documents every parameter inline.
 ## Detailed Documentation
 
 Other than the brief introduction in this page, you can also check the detailed documentation
-[here](./docs/index.md): the depth read-out, the adaptive-window velocity fit and the debug
-visualisation.
+[here](./docs/index.md): confirmation, depth read-out, plausibility and spike filtering, the
+adaptive-window velocity fit and the debug visualisation.
 
 ## Bugs & Feature Requests
 

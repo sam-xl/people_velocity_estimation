@@ -21,9 +21,11 @@
 #include <opencv2/core.hpp>
 #include <optional>
 
+#include "coresense_people_estimation/confirmation_filter.hpp"
 #include "coresense_people_estimation/debug_visualizer.hpp"
 #include "coresense_people_estimation/depth_reader.hpp"
 #include "coresense_people_estimation/person_tracker.hpp"
+#include "coresense_people_estimation/plausibility_filter.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "image_geometry/pinhole_camera_model.hpp"
 #include "message_filters/subscriber.hpp"
@@ -45,7 +47,8 @@ namespace coresense_people_estimation
 /// This class is the plumbing: it pairs detections with depth, decodes the depth
 /// image, latches `camera_info` and `cmd_vel`, and assembles the output message.
 /// The metric work is delegated, one collaborator per README section — see
-/// `DepthReader`, `PersonTracker` and `DebugVisualizer`.
+/// `ConfirmationFilter`, `DepthReader`, `PlausibilityFilter`, `PersonTracker`
+/// and `DebugVisualizer`.
 ///
 /// Positions and velocities are in the **colour optical frame** and relative to
 /// the robot: nothing here re-frames them or takes the robot's own motion out.
@@ -86,8 +89,9 @@ private:
   Eigen::Vector3d positionVariance(const cv::Point3d& ray, const DepthEstimate& depth, double bbox_width,
                                    double bbox_height, double fx, double fy) const;
 
-  /// One detection, all the way to a `Person` — or `std::nullopt` when the depth
-  /// is unusable. Mutates the tracker.
+  /// One detection, all the way to a `Person` — or `std::nullopt` when it has not
+  /// confirmed, the depth is unusable, or the plausibility filter rejects it.
+  /// Mutates the tracker.
   std::optional<people_msgs::msg::Person> processDetection(const cv::Mat& depth_m,
                                                            const riskam_msgs::msg::PersonDetection& detection,
                                                            double stamp);
@@ -105,7 +109,10 @@ private:
   // Each declares its own parameters on this node, so all of them are constructed
   // after the node's own declarations.
 
+  /// Runs first: an unconfirmed detection never reaches the rest of them.
+  std::unique_ptr<ConfirmationFilter> confirmer_;
   std::unique_ptr<DepthReader> depth_reader_;
+  std::unique_ptr<PlausibilityFilter> plausibility_;
   std::unique_ptr<PersonTracker> tracker_;
   /// Runs last, on the message that is about to be published.
   std::unique_ptr<DebugVisualizer> debug_;
@@ -131,7 +138,8 @@ private:
   std::size_t untracked_in_message_{ 0 };
 
   // ── Parameters ────────────────────────────────────────────────────────────
-  // Only the ones this class uses itself.
+  // Only the ones this class uses itself. The depth band is declared here rather
+  // than in `DepthReader` because the plausibility filter reads it too.
 
   double depth_min_m_;
   double depth_max_m_;

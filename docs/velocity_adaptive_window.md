@@ -62,8 +62,12 @@ a transport-theorem correction.
 
 A speed below `velocity_epsilon` publishes as exactly zero, since each person's debug TF frame is
 yawed to `atan2(vx, vz)` about optical −y. Below `velocity_min_span_s` of history there is no
-velocity at all, so a new track reports zero with `velocity_prior_variance`. A track unseen for
-longer than `velocity_max_gap_s` has its history cleared rather than a slope fitted across the hole.
+velocity at all, so a new or re-seeded track reports zero with `velocity_prior_variance`. A track
+unseen for longer than `velocity_max_gap_s` has its history cleared rather than a slope fitted
+across the hole. While the spike filter holds a position the last fitted velocity is republished
+with it — zero would assert the person stopped, which a rejected reading is no evidence of; held
+frames never enter the history, and a re-seed clears it rather than differentiating across the
+discontinuity.
 
 Velocity covariance comes from the fit itself, `Var(v) = σ²·[(AᵀA)⁻¹]₀₀` with
 `σ² = ‖Aβ − p‖²/(n−2)` [[1]](https://iate.oac.uncor.edu/~mario/materia/nr/numrec/f15-2.pdf);

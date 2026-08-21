@@ -19,4 +19,9 @@ Changes:
     - Fit a per-track velocity over an adaptive window chosen by reduced chi-square
 - Add launch file and a parameter file documenting every parameter inline
 - Add bag_camera_shim.py for replays that carry no colour camera_info
+- Add dummy_tf.py to fake the TF chain when there is no localisation stack
 - Add debug marker visualisation, toggled by the launch file's debug argument
+- Filter out implausible and spurious detections
+    - Withhold a detection until its ByteTrack id has been seen confirm_frames frames running, and drop untracked detections outright
+    - Reject people printed on posters, banners and screens by testing whether anything reads behind them
+    - Discard a depth reading that implies more than max_person_speed and republish the last accepted position

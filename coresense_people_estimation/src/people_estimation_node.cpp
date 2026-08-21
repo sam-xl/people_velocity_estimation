@@ -28,10 +28,13 @@
 #include <string>
 #include <utility>
 
+#include "coresense_people_estimation/confirmation_filter.hpp"
 #include "coresense_people_estimation/debug_visualizer.hpp"
 #include "coresense_people_estimation/depth_reader.hpp"
 #include "coresense_people_estimation/keypoints.hpp"
+#include "coresense_people_estimation/parameters.hpp"
 #include "coresense_people_estimation/person_tracker.hpp"
+#include "coresense_people_estimation/plausibility_filter.hpp"
 #include "cv_bridge/cv_bridge.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "message_filters/synchronizer.hpp"
@@ -48,9 +51,6 @@
 
 namespace
 {
-/// Detections arrive at camera rate, so missing-input warnings must be throttled.
-constexpr int kWarnThrottleMs = 5000;
-
 std::string formatCovariance(const std::array<double, 9>& covariance)
 {
   std::ostringstream out;
@@ -89,7 +89,8 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
 
   // ── Depth read-out ────────────────────────────────────────────────────────
   // The valid-depth band is declared here rather than in `DepthReader`, because
-  // both the read-out and the range check in processDetection() judge against it.
+  // three places judge against it: the read-out, the plausibility filter, and
+  // the range check in processDetection() below.
   depth_min_m_ = declare_parameter<double>("depth_min_m", 0.1);
   depth_max_m_ = declare_parameter<double>("depth_max_m", 3.0);
 
@@ -107,7 +108,9 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   // ── Collaborators ─────────────────────────────────────────────────────────
   // Each declares its own parameters on this node, so they come after the block
   // above. One per README section; see the class comment.
+  confirmer_ = std::make_unique<ConfirmationFilter>(*this);
   depth_reader_ = std::make_unique<DepthReader>(*this, depth_min_m_, depth_max_m_);
+  plausibility_ = std::make_unique<PlausibilityFilter>(*this, depth_min_m_);
   tracker_ = std::make_unique<PersonTracker>(*this);
   debug_ = std::make_unique<DebugVisualizer>(*this);
 
@@ -233,7 +236,9 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
     }
   }
 
+  confirmer_->dropStale(stamp);
   tracker_->dropStale(stamp);
+  plausibility_->dropStale(stamp);
 
   people_pub_->publish(people);
 
@@ -300,6 +305,13 @@ Eigen::Vector3d PeopleEstimationNode::positionVariance(const cv::Point3d& ray, c
 std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     const cv::Mat& depth_m, const riskam_msgs::msg::PersonDetection& detection, double stamp)
 {
+  // A box that was not there before is not evidence of a person. Ahead of the
+  // depth read, so an unconfirmed detection costs nothing. See the README.
+  if (!confirmer_->confirmed(detection, stamp))
+  {
+    return std::nullopt;
+  }
+
   const DepthEstimate depth = depth_reader_->read(depth_m, detection);
 
   // No valid reading means no measurement to publish.
@@ -319,6 +331,13 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     fy = camera_model_.fy();
   }
 
+  // A picture of a person is not a person. See the README.
+  const Plausibility verdict = plausibility_->screen(depth_m, detection, depth.depth_m, stamp);
+  if (!verdict.plausible)
+  {
+    return std::nullopt;
+  }
+
   const Eigen::Vector3d position = Eigen::Vector3d(ray.x, ray.y, ray.z) * depth.depth_m;
 
   const double bbox_width = std::abs(static_cast<double>(detection.bbox[2] - detection.bbox[0]));
@@ -330,7 +349,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   // reported unknown rather than zero.
   const TrackUpdate update = detection.track_id >= 0 ?
                                  tracker_->update(detection.track_id, stamp, position, variance, cumulative_yaw_) :
-                                 TrackUpdate{ position, tracker_->priorFit(), 0.0 };
+                                 TrackUpdate::untracked(position, variance, tracker_->priorFit());
 
   // ── Assemble the Person ───────────────────────────────────────────────────
   people_msgs::msg::Person person;
@@ -342,10 +361,13 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   // of how confident this measurement is.
   person.reliability = 1.0;
 
-  // people_msgs/Person has no field for the depth diagnostics, so tagnames/tags
-  // carry them. Always published: dropping a person is diagnosed from these.
-  person.tagnames = { "depth_valid_frac", "depth_spread_m" };
-  person.tags = { std::to_string(depth.valid_frac), std::to_string(depth.spread_m) };
+  // people_msgs/Person has no field for the per-detection diagnostics, so
+  // tagnames/tags carry them. Always published: dropping or holding a person is
+  // diagnosed from these, and background_frac lets the plausibility threshold be
+  // re-tuned from a bag without rebuilding.
+  person.tagnames = { "depth_valid_frac", "depth_spread_m", "position_hold_frames", "background_frac" };
+  person.tags = { std::to_string(depth.valid_frac), std::to_string(depth.spread_m), std::to_string(update.hold_frames),
+                  std::to_string(verdict.background_frac) };
 
   if (publish_covariance_tags_)
   {

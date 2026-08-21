@@ -22,6 +22,7 @@
 #include <deque>
 #include <iterator>
 
+#include "coresense_people_estimation/parameters.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace
@@ -46,6 +47,7 @@ namespace coresense_people_estimation
 {
 
 PersonTracker::PersonTracker(rclcpp::Node& node)
+  : node_(node)
 {
   velocity_prior_variance_ = node.declare_parameter<double>("velocity_prior_variance", 1.0);
 
@@ -60,29 +62,149 @@ PersonTracker::PersonTracker(rclcpp::Node& node)
   const auto declared_maxlen = node.declare_parameter<std::int64_t>("history_maxlen", 60);
   if (declared_maxlen < static_cast<std::int64_t>(kMinFitSamples))
   {
-    RCLCPP_WARN(node.get_logger(),
+    RCLCPP_WARN(node_.get_logger(),
                 "history_maxlen of %ld cannot hold a fit; raising it to %zu. Below that every velocity is zero.",
                 declared_maxlen, kMinFitSamples);
   }
   history_maxlen_ = static_cast<std::size_t>(std::max(declared_maxlen, static_cast<std::int64_t>(kMinFitSamples)));
+
+  // See parameters.hpp for why a count is not declared as a plain int64.
+  max_person_speed_ = node.declare_parameter<double>("max_person_speed", 2.5);
+  spike_reset_timeout_ = node.declare_parameter<double>("spike_reset_timeout", 1.0);
+  spike_max_holds_ = declareCount(node, "spike_max_holds", 5);
 }
 
 TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
                                   const Eigen::Vector3d& variance, double cumulative_yaw)
 {
+  // A reading that implies an impossible speed is a depth error, not motion.
+  const FilteredPosition filtered = filterPosition(track_id, stamp, position, variance, cumulative_yaw);
+
   Track& track = tracks_[track_id];
 
-  // A gap wide enough that this may not be the same person clears the history
-  // rather than having a slope fitted across it.
-  pruneHistory(track.history, stamp);
-  track.history.push_back(Sample{ stamp, position, variance, cumulative_yaw });
-  while (track.history.size() > history_maxlen_)
+  VelocityFit fit;
+  double window_s = 0.0;
+  if (filtered.hold_frames > 0)
   {
-    track.history.pop_front();
+    // Hold the velocity with the position, variance included: a rejected reading
+    // is no evidence that the person stopped.
+    fit = track.last_fit;
+    window_s = track.last_window_s;
+  }
+  else
+  {
+    const AdaptiveFit adaptive = fitAdaptive(track.history);
+    fit = adaptive.fit;
+    window_s = adaptive.window_s;
   }
 
-  const AdaptiveFit adaptive = fitAdaptive(track.history);
-  return TrackUpdate{ position, adaptive.fit, adaptive.window_s };
+  // A held frame republishes exactly what was published last time.
+  if (filtered.hold_frames == 0)
+  {
+    track.last_fit = fit;
+    track.last_window_s = window_s;
+  }
+
+  return TrackUpdate{ filtered.position, filtered.variance, filtered.hold_frames, fit, window_s };
+}
+
+PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track_id, double stamp,
+                                                              const Eigen::Vector3d& position,
+                                                              const Eigen::Vector3d& variance, double cumulative_yaw)
+{
+  // Accepting a reading is also what feeds the velocity fit, so a spike never
+  // becomes a sample and a hold never becomes a stationary one.
+  const auto accept = [&](Track& state) {
+    state.stamp = stamp;
+    state.seen_stamp = stamp;
+    state.position = position;
+    state.variance = variance;
+    state.cumulative_yaw = cumulative_yaw;
+    state.consecutive_holds = 0;
+    // A gap wide enough that this may not be the same person clears the history
+    // rather than having a slope fitted across it.
+    pruneHistory(state.history, stamp);
+    state.history.push_back(Sample{ stamp, position, variance, cumulative_yaw });
+    while (state.history.size() > history_maxlen_)
+    {
+      state.history.pop_front();
+    }
+    return FilteredPosition::measured(position, variance);
+  };
+
+  // This reading is not a successor of the stored one, so every sample in front of
+  // it is the history of somewhere else: differentiating across the discontinuity
+  // would report the discontinuity itself as motion. See the README.
+  const auto reseed = [&](Track& state) {
+    state.history.clear();
+    state.last_fit = priorFit();
+    state.last_window_s = 0.0;
+    return accept(state);
+  };
+
+  const auto it = tracks_.find(track_id);
+  if (it == tracks_.end())
+  {
+    return accept(tracks_[track_id]);
+  }
+  Track& state = it->second;
+  state.seen_stamp = stamp;
+
+  // The A/B switch for judging whether the filter earns its place: at 0 the
+  // tracker behaves exactly as it did before the filter existed, which means
+  // accepting every reading rather than re-seeding on each one.
+  if (spike_max_holds_ == 0)
+  {
+    return accept(state);
+  }
+
+  const double dt = stamp - state.stamp;
+  // The clock walked backwards, as a looping bag does, so the stored position and
+  // the history behind it are from the future.
+  if (dt < 0.0)
+  {
+    return reseed(state);
+  }
+  // Same stamp, so there is no time base to test a speed against.
+  if (dt <= 0.0)
+  {
+    return accept(state);
+  }
+  // Too old to compare against: the stored position is the worse guess, and the
+  // history behind it is older still.
+  if (dt > spike_reset_timeout_)
+  {
+    return reseed(state);
+  }
+
+  // Both readings in this frame's camera pose before they are subtracted. A robot
+  // turn sweeps a stationary person through the optical frame at omega*r, which at
+  // the far end of the depth band clears max_person_speed on its own.
+  const Eigen::Vector3d previous = yawRotation(cumulative_yaw - state.cumulative_yaw) * state.position;
+  const double speed = (position - previous).norm() / dt;
+  // Flat bound on what is left once the robot's own rotation is out. See the README.
+  if (speed <= max_person_speed_)
+  {
+    return accept(state);
+  }
+  // Bounded, because rejecting forever would pin the track at a position the
+  // person may genuinely have left.
+  if (state.consecutive_holds >= spike_max_holds_)
+  {
+    RCLCPP_WARN_THROTTLE(node_.get_logger(), *node_.get_clock(), kWarnThrottleMs,
+                         "Track %d has implied %.1f m/s for %zu frames running; believing the sensor again. Either "
+                         "max_person_speed is too tight, or this track id was handed to a different person.",
+                         track_id, speed, state.consecutive_holds);
+    // The jump is taken as real, so the track starts over from this reading.
+    return reseed(state);
+  }
+
+  ++state.consecutive_holds;
+  RCLCPP_DEBUG(node_.get_logger(), "Holding track %d at its previous position (%.1f m/s implied, hold %zu)", track_id,
+               speed, state.consecutive_holds);
+  // The stored variance, not this frame's: the measured one is centred on the
+  // reading just rejected. See the README.
+  return FilteredPosition::held(state.position, state.variance, state.consecutive_holds);
 }
 
 VelocityFit PersonTracker::priorFit() const
@@ -257,7 +379,8 @@ Eigen::MatrixX3d PersonTracker::positions(const std::deque<Sample>& history)
 void PersonTracker::pruneHistory(std::deque<Sample>& history, double now) const
 {
   // A gap this long means the track was not observed for most of a window.
-  if (!history.empty() && (now - history.back().stamp) > velocity_max_gap_s_)
+  // Absolute value because a looping bag walks the clock backwards.
+  if (!history.empty() && std::abs(now - history.back().stamp) > velocity_max_gap_s_)
   {
     history.clear();
     return;
@@ -270,13 +393,16 @@ void PersonTracker::pruneHistory(std::deque<Sample>& history, double now) const
 
 void PersonTracker::dropStale(double now)
 {
-  // A track with nothing left inside the longest window contributes nothing but
-  // a map entry. Absolute value because a looping bag walks the clock backwards.
+  // A track is forgotten once neither of the two things it remembers is usable any
+  // more: the accepted position the spike filter compares against, and the history
+  // the velocity is fitted over. Whichever outlives the other sets the lifetime,
+  // so neither parameter silently truncates the other. Judged on when the track
+  // was last seen, which a held frame refreshes and `stamp` deliberately does not.
+  // Absolute value because a looping bag walks the clock backwards.
+  const double retain_s = std::max(spike_reset_timeout_, velocity_window_max_s_);
   for (auto it = tracks_.begin(); it != tracks_.end();)
   {
-    const std::deque<Sample>& history = it->second.history;
-    const bool stale = history.empty() || std::abs(now - history.back().stamp) > velocity_window_max_s_;
-    it = stale ? tracks_.erase(it) : std::next(it);
+    it = std::abs(now - it->second.seen_stamp) > retain_s ? tracks_.erase(it) : std::next(it);
   }
 }
 

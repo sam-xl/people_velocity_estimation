@@ -1,0 +1,48 @@
+# Parameters for the people_estimation node. The key below must match the
+# fully-qualified node name, or none of these are applied.
+/people_estimation:
+  ros__parameters:
+    # ── Topics ──────────────────────────────────────────────────────────────
+    detections_topic: /riskam/person_detections
+    # MUST be depth registered to the COLOUR frame. Bounding boxes and keypoints
+    # are colour-image pixels, and /camera/camera/depth/image_rect_raw is in
+    # camera_depth_optical_frame with a wider FOV and a different focal length,
+    # so indexing it with colour coordinates reads the wrong part of the scene.
+    # Needs align_depth.enable: true on the driver.
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    # Positions go out in the colour optical frame, relative to the robot.
+    people_topic: /people
+    # Detections and depth are paired by stamp, with the same slop riskam_node
+    # uses to pair colour and depth upstream.
+    sync_queue_size: 10
+    sync_slop: 0.1
+
+    # ── Depth read-out ──────────────────────────────────────────────────────
+    # Percentile for the whole-bbox fallback, and in both cases the low end of
+    # the reported depth spread.
+    depth_percentile: 10.0
+    # Half-width in pixels of the patch sampled around each torso keypoint.
+    # Depth images are speckled with dropouts, which a single pixel would hit.
+    keypoint_patch_radius: 3
+    # Readings outside this band are treated as missing. depth_min_m matches
+    # riskam.ml.depth.DEPTH_MIN_M.
+    depth_min_m: 0.1
+    depth_max_m: 3.0
+
+    # ── Debug visualisation ─────────────────────────────────────────────────
+    # Master switch. Off means no marker publisher and no TF broadcaster are
+    # created at all, so the settings below are inert. The launch file's
+    # debug:= argument overrides this value.
+    debug: false
+    # MarkerArray topic. "~/" resolves to /people_estimation/debug_markers.
+    debug_topic: ~/debug_markers
+    # Broadcast one TF frame per person, at their position. Set false to keep
+    # the TF tree clean.
+    debug_person_frames: true
+    # Radius of the person sphere, in metres. The text size derives from it, so
+    # this scales the whole drawing.
+    debug_person_radius: 0.2
+    # How long markers survive without a refresh. Short enough that a stalled
+    # pipeline is visible as markers vanishing; 0 keeps them forever.
+    debug_marker_lifetime: 0.5

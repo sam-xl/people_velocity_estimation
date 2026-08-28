@@ -20,8 +20,9 @@ include:
 .industrial_ci_jazzy:
   extends: .ros_industrial_ci_base
   image: ros:jazzy
-  # variables: 
-  #   UPSTREAM_WORKSPACE: .repos
+  variables:
+    # riskam_msgs and people_msgs are source dependencies rosdep cannot resolve.
+    UPSTREAM_WORKSPACE: .repos
 
 ###########################################################
 # Default settings for all jobs and workflow

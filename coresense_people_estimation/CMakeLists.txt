@@ -16,6 +16,8 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(riskam_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
@@ -24,6 +26,7 @@ add_library(${PROJECT_NAME}_component
   src/debug_visualizer.cpp
   src/depth_reader.cpp
   src/people_estimation_node.cpp
+  src/person_tracker.cpp
 )
 target_compile_features(${PROJECT_NAME}_component PUBLIC cxx_std_17)
 target_include_directories(${PROJECT_NAME}_component
@@ -40,6 +43,8 @@ target_link_libraries(${PROJECT_NAME}_component
   rclcpp_components::component
   ${riskam_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
+  tf2::tf2
+  tf2_geometry_msgs::tf2_geometry_msgs
   tf2_ros::tf2_ros
   ${visualization_msgs_TARGETS}
 )

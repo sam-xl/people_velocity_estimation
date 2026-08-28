@@ -116,7 +116,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
     const double median = percentile(valid, 50.0);
     const double low = percentile(valid, depth_percentile_);
     return DepthEstimate{ median, std::max(0.0, median - low),
-                          static_cast<double>(valid.size()) / static_cast<double>(sampled) };
+                          static_cast<double>(valid.size()) / static_cast<double>(sampled), false };
   }
 
   // ── Fallback: the whole bounding box ────────────────────────────────────────
@@ -132,7 +132,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
                               detection.bbox[1] < depth_m.rows;
   if (!overlaps_image || x1 < x0 || y1 < y0)
   {
-    return DepthEstimate{ 0.0, 0.0, 0.0 };
+    return DepthEstimate{ 0.0, 0.0, 0.0, true };
   }
 
   // Multiply in std::size_t rather than widening the int product.
@@ -154,7 +154,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
 
   if (valid.empty())
   {
-    return DepthEstimate{ 0.0, 0.0, 0.0 };
+    return DepthEstimate{ 0.0, 0.0, 0.0, true };
   }
 
   // Low percentile = "closest valid surface in this box", which is the person
@@ -162,7 +162,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
   const double low = percentile(valid, depth_percentile_);
   const double median = percentile(valid, 50.0);
   return DepthEstimate{ low, std::max(0.0, median - low),
-                        static_cast<double>(valid.size()) / static_cast<double>(bbox_sampled) };
+                        static_cast<double>(valid.size()) / static_cast<double>(bbox_sampled), true };
 }
 
 }  // namespace coresense_people_estimation

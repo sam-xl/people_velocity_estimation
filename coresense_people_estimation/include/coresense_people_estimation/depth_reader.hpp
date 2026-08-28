@@ -32,6 +32,10 @@ struct DepthEstimate
   double depth_m;     ///< representative distance to the person
   double spread_m;    ///< robust scale of the readings that produced it
   double valid_frac;  ///< fraction of sampled pixels that carried valid depth
+  /// Set when no torso keypoint carried depth and the whole bounding box was
+  /// read instead. `spread_m` is then the gap to whatever is behind the person,
+  /// not the noise on their own surface, so it is no measure of uncertainty.
+  bool from_bbox_fallback;
 };
 
 /// Reads how far away a detected person is, out of the registered depth image.

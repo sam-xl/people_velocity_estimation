@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ROS 2 style mandates this <PACKAGE>__<PATH>_HPP_ guard and ament's cpplint
-// enforces it, so the reserved-identifier rule loses here.
-#ifndef CORESENSE_PEOPLE_ESTIMATION__KEYPOINTS_HPP_
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#define CORESENSE_PEOPLE_ESTIMATION__KEYPOINTS_HPP_
+#pragma once
 
 #include <cstddef>
 
@@ -60,5 +56,3 @@ inline std::size_t countValidKeypoints(const riskam_msgs::msg::PersonDetection& 
 }
 
 }  // namespace coresense_people_estimation
-
-#endif  // CORESENSE_PEOPLE_ESTIMATION__KEYPOINTS_HPP_

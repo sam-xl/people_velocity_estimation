@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ROS 2 style mandates this <PACKAGE>__<PATH>_HPP_ guard and ament's cpplint
-// enforces it, so the reserved-identifier rule loses here.
-#ifndef CORESENSE_PEOPLE_ESTIMATION__DEPTH_READER_HPP_
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#define CORESENSE_PEOPLE_ESTIMATION__DEPTH_READER_HPP_
+#pragma once
 
 #include <opencv2/core.hpp>
 
@@ -56,15 +52,12 @@ public:
 
 private:
   // ── Parameters ──────────────────────────────────────────────────────────────
-  double depth_percentile_{ 10.0 };
-  int keypoint_patch_radius_{ 3 };
+  double depth_percentile_;
+  int keypoint_patch_radius_;
 
-  /// Declared by the owning node, not here. Readings outside this band are
-  /// treated as missing.
-  double depth_min_m_{ 0.1 };
-  double depth_max_m_{ 3.0 };
+  // ── Injected by the owning node ─────────────────────────────────────────────
+  const double depth_min_m_;
+  const double depth_max_m_;
 };
 
 }  // namespace coresense_people_estimation
-
-#endif  // CORESENSE_PEOPLE_ESTIMATION__DEPTH_READER_HPP_

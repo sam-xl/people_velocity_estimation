@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ROS 2 style mandates this <PACKAGE>__<PATH>_HPP_ guard and ament's cpplint
-// enforces it, so the reserved-identifier rule loses here.
-#ifndef CORESENSE_PEOPLE_ESTIMATION__DEBUG_VISUALIZER_HPP_
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#define CORESENSE_PEOPLE_ESTIMATION__DEBUG_VISUALIZER_HPP_
+#pragma once
 
 #include <cstddef>
 #include <memory>
@@ -63,9 +59,9 @@ private:
   rclcpp::Node& node_;
 
   // ── Parameters ────────────────────────────────────────────────────────────
-  bool debug_{ false };
-  bool debug_person_frames_{ true };
-  double debug_person_radius_{ 0.2 };
+  bool debug_;
+  bool debug_person_frames_;
+  double debug_person_radius_;
   rclcpp::Duration debug_marker_lifetime_{ 0, 0 };
 
   /// Only created when debug person frames are enabled — a node that is not
@@ -80,5 +76,3 @@ private:
 };
 
 }  // namespace coresense_people_estimation
-
-#endif  // CORESENSE_PEOPLE_ESTIMATION__DEBUG_VISUALIZER_HPP_

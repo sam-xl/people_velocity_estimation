@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// ROS 2 style mandates this <PACKAGE>__<PATH>_HPP_ guard and ament's cpplint
-// enforces it, so the reserved-identifier rule loses here.
-#ifndef CORESENSE_PEOPLE_ESTIMATION__PEOPLE_ESTIMATION_NODE_HPP_
-// NOLINTNEXTLINE(bugprone-reserved-identifier,cert-dcl37-c,cert-dcl51-cpp)
-#define CORESENSE_PEOPLE_ESTIMATION__PEOPLE_ESTIMATION_NODE_HPP_
+#pragma once
 
 #include <cstddef>
 #include <memory>
@@ -106,10 +102,8 @@ private:
   // ── Parameters ────────────────────────────────────────────────────────────
   // Only the ones this class uses itself.
 
-  double depth_min_m_{ 0.1 };
-  double depth_max_m_{ 3.0 };
+  double depth_min_m_;
+  double depth_max_m_;
 };
 
 }  // namespace coresense_people_estimation
-
-#endif  // CORESENSE_PEOPLE_ESTIMATION__PEOPLE_ESTIMATION_NODE_HPP_

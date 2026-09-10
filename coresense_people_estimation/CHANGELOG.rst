@@ -1,14 +1,14 @@
-^^^^^^^^^
-Changelog
-^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Changelog for coresense_people_estimation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 .. 
     please read REP 132, it contains both requirements and elaborate examples
     of changelogs. 
 
     link: https://www.ros.org/reps/rep-0132.html
 
-0.0.1(Forthcoming)
-==================
+Forthcoming
+===========
 Created coresense_people_estimation and added the people_estimation node
 
 Changes:

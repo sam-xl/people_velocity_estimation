@@ -1,0 +1,94 @@
+###########################################################
+# CI/CD stages: in the order they should be run
+###########################################################
+
+stages:
+  - static_test
+  - build
+  - test
+
+###########################################################
+# Templates: include and define base templates
+###########################################################
+
+include:
+  - .ci/ros_industrial_ci_base.yml
+  - .ci/utils.yml
+  # jobs in this file only run in the project_template repo
+  - .ci/tests/template_tests.yml
+
+.industrial_ci_jazzy:
+  extends: .ros_industrial_ci_base
+  image: ros:jazzy
+  variables:
+    # riskam_msgs and people_msgs are source dependencies rosdep cannot resolve.
+    UPSTREAM_WORKSPACE: .repos
+
+###########################################################
+# Default settings for all jobs and workflow
+###########################################################
+
+# Auto-cancel older running pipelines when a newer commit is pushed.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
+default:
+  interruptible: true
+
+###########################################################
+# CI/CD Pipeline
+###########################################################
+
+# stage: static_test
+
+clang_format_check:
+  stage: static_test
+  extends: 
+    - .industrial_ci_jazzy
+    - .if_default_branch_or_merge_request
+  variables:
+    CLANG_FORMAT_CHECK: "file"
+    CLANG_FORMAT_VERSION: "18"
+
+python_format_check:
+  stage: static_test
+  extends: 
+    - .industrial_ci_jazzy
+    - .if_default_branch_or_merge_request
+  variables:
+    # run a custom industrial_ci test
+    TEST: .ci/python_format_check.sh
+
+xml_lint_check:
+  stage: static_test
+  extends: 
+    - .industrial_ci_jazzy
+    - .if_default_branch_or_merge_request
+  variables:
+    # run a custom industrial_ci test
+    TEST: .ci/xml_lint_check.sh
+
+# stage: build
+
+ros-jazzy:build:
+  stage: build
+  needs: []
+  extends: 
+    - .industrial_ci_jazzy
+    - .build_artifacts
+    - .if_default_branch_or_merge_request
+  variables:
+    # Do not run the tests, want to do this in the test stage
+    NOT_TEST_BUILD: true
+
+# stage: test
+
+ros-jazzy:test:
+  stage: test
+  needs:
+    - job: ros-jazzy:build
+  extends: 
+    - .industrial_ci_jazzy
+    - .test_artifacts
+    - .if_default_branch_or_merge_request

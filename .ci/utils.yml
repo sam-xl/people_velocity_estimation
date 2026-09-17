@@ -1,0 +1,59 @@
+############################################################
+# General utilities for the CI/CD pipeline
+#
+# Extend your job with any of these handles to make them
+# active. This file can be extended in your project to do
+# more advanced CI/CD steps as part of your pipeline. 
+############################################################
+
+# run jobs for the default branch
+.if_default_branch:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# run jobs for merge requests
+.if_merge_request:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+
+# run jobs for either the default branch or merge requests
+# reuses the rules defined in .if_merge_request and .if_default_branch using the `!reference`
+# operator (GitLab specific):
+#   - https://docs.gitlab.com/ci/yaml/yaml_optimization/#reference-tags
+.if_default_branch_or_merge_request:
+  rules:
+  - !reference [.if_merge_request, rules]
+  - !reference [.if_default_branch, rules]
+
+# cache the workspaces by moving them to the correct location
+.cache_workspaces:
+  after_script:
+    # cache/artifacts can only be specified inside the ${CI_PROJECT_DIR}
+    #   note: if this command is changed, also update the before script section in `.ros_industrial_base`
+    - cp -a ${BASEDIR}/. ${CI_PROJECT_DIR}/${CI_CACHE_DIR}
+
+# store the build logs as artifacts (and caches the workspaces)
+# extends .cache_workspaces as artifacts can only be retrieved from inside the ${CI_PROJECT_DIR}
+.build_artifacts:
+  extends:
+    - .cache_workspaces
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/${CI_CACHE_DIR}/target_ws/log*/**/*.log
+    expire_in: 1 week
+
+# store the test results as artifacts (and caches the workspaces)
+# extends .cache_workspaces as artifacts can only be retrieved from inside the ${CI_PROJECT_DIR}
+.test_artifacts:
+  extends: 
+    - .cache_workspaces
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/${CI_CACHE_DIR}/target_ws/build/*/test_results/*/*.xml
+      - ${CI_PROJECT_DIR}/${CI_CACHE_DIR}/target_ws/build/*/pytest.xml
+    reports:
+      junit:
+        - ${CI_PROJECT_DIR}/${CI_CACHE_DIR}/target_ws/build/*/test_results/*/*.xml
+        - ${CI_PROJECT_DIR}/${CI_CACHE_DIR}/target_ws/build/*/pytest.xml
+    expire_in: 1 week

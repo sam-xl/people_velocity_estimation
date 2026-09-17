@@ -1,0 +1,13 @@
+repositories:
+  # people_msgs — the interface this node publishes on, and what nav2's social
+  # costmap layer consumes.
+  people:
+    type: git
+    url: https://github.com/wg-perception/people.git
+    version: 0ae47f6e0208cedd84d19d066743fdc1d05fcafa  # ros2 at 21-08-2026
+
+  # riskam_msgs — the PersonDetections interface this node consumes.
+  risk-awareness-module:
+    type: git
+    url: https://github.com/sam-xl/risk-awareness-module.git
+    version: 8459483ca04c37ab69303d64d5e4e385cd2f569d  # main on 21-08-2026

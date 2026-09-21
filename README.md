@@ -63,7 +63,7 @@ colcon build
 ## Usage
 
 ```bash
-ros2 launch coresense_people_estimation people_estimation.launch.py
+ros2 launch coresense_people_estimation people_estimation.launch
 ```
 
 Override the parameter file with `config:=/path/to/your.yml`. Add `debug:=true` to draw the
@@ -80,7 +80,7 @@ A replay carrying the detections and the aligned depth image is the whole rig â€
 tree to fake:
 
 ```bash
-ros2 launch coresense_people_estimation people_estimation.launch.py debug:=true
+ros2 launch coresense_people_estimation people_estimation.launch debug:=true
 ros2 bag play <bag>
 ros2 topic echo /people
 ```
@@ -101,7 +101,7 @@ close enough to trust a number from. Takes `--help`.
 
 ## Launch files
 
-* **`people_estimation.launch.py`**: brings up the node as `/people_estimation`, with
+* **`people_estimation.launch`**: brings up the node as `/people_estimation`, with
   `config/people_estimation.yml`. Arguments: `config` and `debug`. `debug:=` always overrides
   the parameter file's `debug` key.
 

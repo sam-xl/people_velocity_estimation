@@ -101,42 +101,34 @@ Plausibility PlausibilityFilter::backgroundFraction(const cv::Mat& depth_m,
   Plausibility result;
 
   // A strip across the top of the box, full width: the head is narrow and the box
-  // is not, so most of it reads whatever is behind the person. Bounds are
-  // half-open on both axes, matching the bbox convention and the loops below.
-  const int x0 = std::clamp(std::min(detection.bbox[0], detection.bbox[2]), 0, depth_m.cols);
-  const int x1 = std::clamp(std::max(detection.bbox[0], detection.bbox[2]), 0, depth_m.cols);
-  const int y0 = std::clamp(std::min(detection.bbox[1], detection.bbox[3]), 0, depth_m.rows);
-  const int y_bottom = std::clamp(std::max(detection.bbox[1], detection.bbox[3]), 0, depth_m.rows);
-  const int height = y_bottom - y0;
-  if (x1 <= x0 || height <= 0)
+  // is not, so most of it reads whatever is behind the person. The two-corner
+  // constructor orders the corners and is half-open, matching the bbox convention.
+  const cv::Rect image(0, 0, depth_m.cols, depth_m.rows);
+  const cv::Rect bbox =
+      cv::Rect(cv::Point(detection.bbox[0], detection.bbox[1]), cv::Point(detection.bbox[2], detection.bbox[3])) &
+      image;
+  if (bbox.empty())
   {
     return result;
   }
 
   // Rounded down to nothing for a short box, so floored at one row: a box worth
   // measuring at all is worth measuring one row of.
-  const int strip_rows = std::max(1, static_cast<int>(std::lround(background_strip_frac_ * height)));
-  const int y1 = std::min(y_bottom, y0 + strip_rows);
+  const int strip_rows = std::max(1, static_cast<int>(std::lround(background_strip_frac_ * bbox.height)));
+  const cv::Rect strip = cv::Rect(bbox.x, bbox.y, bbox.width, strip_rows) & bbox;
 
   // Behind the person: past them by more than a body's depth, or no return at all.
-  // Deliberately not clipped to depth_max_m. See the README.
+  // Deliberately not clipped to depth_max_m. See the README. NaN fails both
+  // range comparisons, so it lands on the "behind" side with the dropouts.
   const double far_threshold = depth_z + background_step_m_;
-  std::size_t behind = 0;
-  for (int y = y0; y < y1; ++y)
-  {
-    // decodeDepth guarantees CV_32F, so the row is addressable directly.
-    const float* row = depth_m.ptr<float>(y);
-    for (int x = x0; x < x1; ++x)
-    {
-      const float d = row[x];
-      if (!std::isfinite(d) || d < depth_min_m_ || static_cast<double>(d) > far_threshold)
-      {
-        ++behind;
-      }
-    }
-  }
+  // Compared in double: inRange would otherwise round the bounds to float.
+  cv::Mat strip_m;
+  depth_m(strip).convertTo(strip_m, CV_64F);
+  cv::Mat in_front;
+  cv::inRange(strip_m, depth_min_m_, far_threshold, in_front);
+  const auto total = static_cast<std::size_t>(strip.area());
+  const auto behind = total - static_cast<std::size_t>(cv::countNonZero(in_front));
 
-  const auto total = static_cast<std::size_t>(y1 - y0) * static_cast<std::size_t>(x1 - x0);
   result.n_pixels = total;
   result.background_frac = total > 0 ? static_cast<double>(behind) / static_cast<double>(total) : 0.0;
   return result;

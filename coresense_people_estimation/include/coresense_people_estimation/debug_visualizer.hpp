@@ -14,13 +14,13 @@
 
 #pragma once
 
+#include <Eigen/Core>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 
-#include "geometry_msgs/msg/vector3.hpp"
 #include "people_msgs/msg/people.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/transform_broadcaster.hpp"
@@ -53,8 +53,8 @@ public:
   /// wrong way explains every wrong person velocity at once.
   struct RobotArrow
   {
-    geometry_msgs::msg::Vector3 origin;
-    geometry_msgs::msg::Vector3 linear;
+    Eigen::Vector3d origin;
+    Eigen::Vector3d linear;
   };
 
   /// True when the untransformed input is worth keeping a copy of, so the

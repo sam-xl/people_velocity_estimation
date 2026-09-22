@@ -14,15 +14,15 @@
 
 #include "coresense_people_estimation/people_map_transform.hpp"
 
+#include <Eigen/Geometry>
 #include <memory>
 #include <optional>
 #include <string>
 
 #include "coresense_people_estimation/parameters.hpp"
-#include "tf2/LinearMath/Vector3.hpp"
 #include "tf2/exceptions.hpp"
 #include "tf2/time.hpp"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 
 namespace coresense_people_estimation
 {
@@ -102,32 +102,22 @@ bool PeopleMapTransform::transform(people_msgs::msg::People& people,
                          "require_cmd_vel is set but no usable robot velocity is available; dropping message.");
     return false;
   }
-  // Default-initialised rather than brace-initialised: the members are messages
-  // with explicit constructors, which an initializer list would go through.
-  RobotMotion stationary;
-  const RobotMotion motion = robot_motion.value_or(stationary);
-  const tf2::Vector3 v_base(motion.linear.x, motion.linear.y, motion.linear.z);
-  const tf2::Vector3 omega(motion.angular.x, motion.angular.y, motion.angular.z);
-  const tf2::Vector3 base_origin(motion.base_origin.x, motion.base_origin.y, motion.base_origin.z);
+  const RobotMotion motion = robot_motion.value_or(RobotMotion{});
+  const Eigen::Isometry3d source_to_target_tf = tf2::transformToEigen(source_to_target);
 
   people.header.frame_id = target_frame_;
 
   for (auto& person : people.people)
   {
-    // Position: full rigid-body transform (rotation + translation).
-    geometry_msgs::msg::Point position_in_target;
-    tf2::doTransform(person.position, position_in_target, source_to_target);
+    Eigen::Vector3d position;
+    tf2::fromMsg(person.position, position);
+    Eigen::Vector3d velocity;
+    tf2::fromMsg(person.velocity, velocity);
 
-    // Velocity: rotation only — a velocity is a free vector, so the
-    // translation part of the transform must not be applied. The result is
-    // still relative to the (moving) robot at this point.
-    geometry_msgs::msg::Vector3 v_relative;
-    v_relative.x = person.velocity.x;
-    v_relative.y = person.velocity.y;
-    v_relative.z = person.velocity.z;
-
-    geometry_msgs::msg::Vector3 v_rotated;
-    tf2::doTransform(v_relative, v_rotated, source_to_target);
+    // Position: the full rigid-body transform. Velocity: rotation only — a free
+    // vector takes no translation — and still relative to the moving robot.
+    const Eigen::Vector3d position_in_target = source_to_target_tf * position;
+    const Eigen::Vector3d velocity_in_target = source_to_target_tf.linear() * velocity;
 
     // Transport theorem: a velocity measured in a frame that both translates
     // and rotates needs both of the robot's motion terms added back.
@@ -137,16 +127,13 @@ bool PeopleMapTransform::transform(people_msgs::msg::People& people,
     // The lever arm runs from the *base* origin, not the camera origin: the
     // camera's own lever arm cancels between its linear and angular
     // contributions, since the camera is rigidly attached to the base.
-    const tf2::Vector3 lever(position_in_target.x - base_origin.x(), position_in_target.y - base_origin.y(),
-                             position_in_target.z - base_origin.z());
-    const tf2::Vector3 v_world = tf2::Vector3(v_rotated.x, v_rotated.y, v_rotated.z) + v_base + omega.cross(lever);
+    const Eigen::Vector3d lever = position_in_target - motion.base_origin;
+    const Eigen::Vector3d v_world = velocity_in_target + motion.linear + motion.angular.cross(lever);
 
     // name, reliability, tagnames and tags carry through untouched; the
     // covariance tags stay in the frame they were measured in. See the README.
-    person.position = position_in_target;
-    person.velocity.x = v_world.x();
-    person.velocity.y = v_world.y();
-    person.velocity.z = v_world.z();
+    person.position = tf2::toMsg(position_in_target);
+    person.velocity = tf2::toMsg(v_world);
   }
 
   return true;
@@ -223,11 +210,15 @@ std::optional<PeopleMapTransform::RobotMotion> PeopleMapTransform::robotMotionIn
     return std::nullopt;
   }
 
+  const Eigen::Isometry3d base_to_target_tf = tf2::transformToEigen(base_to_target);
+  Eigen::Matrix<double, 6, 1> twist;
+  tf2::fromMsg(*cmd_vel, twist);
+
   RobotMotion motion;
-  tf2::doTransform(cmd_vel->linear, motion.linear, base_to_target);
-  tf2::doTransform(cmd_vel->angular, motion.angular, base_to_target);
+  motion.linear = base_to_target_tf.linear() * twist.head<3>();
+  motion.angular = base_to_target_tf.linear() * twist.tail<3>();
   // The translation of base -> target *is* the base origin in target coords.
-  motion.base_origin = base_to_target.transform.translation;
+  motion.base_origin = base_to_target_tf.translation();
   return motion;
 }
 

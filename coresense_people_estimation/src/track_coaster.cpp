@@ -14,6 +14,7 @@
 
 #include "coresense_people_estimation/track_coaster.hpp"
 
+#include <Eigen/Core>
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -26,6 +27,7 @@
 #include "people_msgs/msg/people.hpp"
 #include "people_msgs/msg/person.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 
 namespace coresense_people_estimation
 {
@@ -69,9 +71,12 @@ std::vector<people_msgs::msg::Person> TrackCoaster::coast(double stamp, const st
     people_msgs::msg::Person person = state.person;
     // Constant velocity, from the anchor rather than from the last extrapolation,
     // so the error stays proportional to dt instead of compounding frame by frame.
-    person.position.x = state.person.position.x + state.person.velocity.x * dt;
-    person.position.y = state.person.position.y + state.person.velocity.y * dt;
-    person.position.z = state.person.position.z + state.person.velocity.z * dt;
+    Eigen::Vector3d anchor;
+    tf2::fromMsg(state.person.position, anchor);
+    Eigen::Vector3d velocity;
+    tf2::fromMsg(state.person.velocity, velocity);
+    const Eigen::Vector3d extrapolated = anchor + velocity * dt;
+    person.position = tf2::toMsg(extrapolated);
 
     // Erased rather than skipped, so turning away cannot bring the ghost back.
     if (in_view && in_view(person.position))

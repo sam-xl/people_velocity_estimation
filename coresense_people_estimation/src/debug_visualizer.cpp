@@ -14,6 +14,7 @@
 
 #include "coresense_people_estimation/debug_visualizer.hpp"
 
+#include <Eigen/Core>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -34,6 +35,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
 #include "tf2/LinearMath/Quaternion.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/transform_broadcaster.hpp"
 #include "visualization_msgs/msg/marker.hpp"
@@ -103,20 +105,16 @@ visualization_msgs::msg::Marker makeMarker(const std_msgs::msg::Header& header, 
 /// Lays an ARROW marker out as start point plus displacement, sizing the shaft
 /// and head off `radius` so arrows stay legible whatever the person scale is.
 /// Returns false when the displacement is too short to draw.
-bool setArrow(visualization_msgs::msg::Marker& marker, const geometry_msgs::msg::Point& start, double dx, double dy,
-              double dz, double radius)
+bool setArrow(visualization_msgs::msg::Marker& marker, const Eigen::Vector3d& start,
+              const Eigen::Vector3d& displacement, double radius)
 {
-  if (std::hypot(dx, dy, dz) < kMinArrowLength)
+  if (displacement.norm() < kMinArrowLength)
   {
     return false;
   }
 
-  geometry_msgs::msg::Point tip;
-  tip.x = start.x + dx;
-  tip.y = start.y + dy;
-  tip.z = start.z + dz;
-
-  marker.points = { start, tip };
+  const Eigen::Vector3d tip = start + displacement;
+  marker.points = { tf2::toMsg(start), tf2::toMsg(tip) };
   marker.scale.x = kShaftDiameterFrac * radius;
   marker.scale.y = kHeadDiameterFrac * radius;
   marker.scale.z = kHeadLengthFrac * radius;
@@ -207,11 +205,12 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
     array.markers.push_back(std::move(sphere));
 
     // Velocity, as a look-ahead arrow.
-    const double speed = std::hypot(person.velocity.x, person.velocity.y, person.velocity.z);
+    Eigen::Vector3d position;
+    tf2::fromMsg(person.position, position);
+    Eigen::Vector3d velocity;
+    tf2::fromMsg(person.velocity, velocity);
     auto arrow = makeMarker(people.header, kNsVelocity, id, type_arrow, kVelocityColor, debug_marker_lifetime_);
-    if (setArrow(arrow, person.position, person.velocity.x * debug_velocity_scale_,
-                 person.velocity.y * debug_velocity_scale_, person.velocity.z * debug_velocity_scale_,
-                 debug_person_radius_))
+    if (setArrow(arrow, position, debug_velocity_scale_ * velocity, debug_person_radius_))
     {
       // Arrow ids must stay dense from 0 for the stale-marker sweep to work,
       // so a skipped (near-stationary) person does not burn an id.
@@ -224,7 +223,7 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
     label.pose.position = person.position;
     label.pose.position.z += kLabelHeightAboveCentreFrac * debug_person_radius_;
     label.scale.z = kLabelTextHeightFrac * debug_person_radius_;
-    label.text = personLabel(person, i, speed);
+    label.text = personLabel(person, i, velocity.norm());
     array.markers.push_back(std::move(label));
   }
 
@@ -244,10 +243,12 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
       sphere.scale.x = sphere.scale.y = sphere.scale.z = 2.0 * debug_person_radius_;
       array.markers.push_back(std::move(sphere));
 
+      Eigen::Vector3d position;
+      tf2::fromMsg(person.position, position);
+      Eigen::Vector3d velocity;
+      tf2::fromMsg(person.velocity, velocity);
       auto arrow = makeMarker(raw.header, kNsRawVelocity, id, type_arrow, kRawVelocityColor, debug_marker_lifetime_);
-      if (setArrow(arrow, person.position, person.velocity.x * debug_velocity_scale_,
-                   person.velocity.y * debug_velocity_scale_, person.velocity.z * debug_velocity_scale_,
-                   debug_person_radius_))
+      if (setArrow(arrow, position, debug_velocity_scale_ * velocity, debug_person_radius_))
       {
         arrow.id = static_cast<int>(raw_velocity_count++);
         array.markers.push_back(std::move(arrow));
@@ -262,12 +263,7 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
   if (robot.has_value())
   {
     auto arrow = makeMarker(people.header, kNsRobot, 0, type_arrow, kRobotColor, debug_marker_lifetime_);
-    geometry_msgs::msg::Point origin;
-    origin.x = robot->origin.x;
-    origin.y = robot->origin.y;
-    origin.z = robot->origin.z;
-    if (setArrow(arrow, origin, robot->linear.x * debug_velocity_scale_, robot->linear.y * debug_velocity_scale_,
-                 robot->linear.z * debug_velocity_scale_, debug_person_radius_))
+    if (setArrow(arrow, robot->origin, debug_velocity_scale_ * robot->linear, debug_person_radius_))
     {
       array.markers.push_back(std::move(arrow));
       robot_count = 1;

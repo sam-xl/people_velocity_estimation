@@ -58,18 +58,9 @@ namespace
 {
 std::string formatCovariance(const Eigen::Matrix3d& covariance)
 {
+  static const Eigen::IOFormat kRowMajorSpaced(Eigen::StreamPrecision, Eigen::DontAlignCols, " ", " ");
   std::ostringstream out;
-  for (Eigen::Index row = 0; row < 3; ++row)
-  {
-    for (Eigen::Index col = 0; col < 3; ++col)
-    {
-      if (row != 0 || col != 0)
-      {
-        out << ' ';
-      }
-      out << covariance(row, col);
-    }
-  }
+  out << covariance.format(kRowMajorSpaced);
   return out.str();
 }
 }  // namespace
@@ -335,8 +326,8 @@ bool PeopleEstimationNode::inCameraView(const geometry_msgs::msg::Point& positio
   // dropped, which is the safe direction.
   const double margin_x = camera_model_.getDeltaU(coast_in_view_margin_m_, in_camera.z);
   const double margin_y = camera_model_.getDeltaV(coast_in_view_margin_m_, in_camera.z);
-  return pixel.x >= margin_x && pixel.x < resolution.width - margin_x && pixel.y >= margin_y &&
-         pixel.y < resolution.height - margin_y;
+  const cv::Rect2d inset(margin_x, margin_y, resolution.width - 2.0 * margin_x, resolution.height - 2.0 * margin_y);
+  return inset.contains(pixel);
 }
 
 // ── Per-detection pipeline ──────────────────────────────────────────────────

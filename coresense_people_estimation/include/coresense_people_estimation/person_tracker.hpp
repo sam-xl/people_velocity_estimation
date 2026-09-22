@@ -90,11 +90,10 @@ private:
   /// One accepted observation of a track; a held frame is never a sample.
   struct Sample
   {
-    double stamp;              ///< seconds, from the detection message header
-    Eigen::Vector3d position;  ///< colour optical frame, metres
-    Eigen::Vector3d variance;  ///< diagonal of the position covariance, m^2
-    double covariance_xz;      ///< xz entry, needed when a sample is de-rotated
-    double cumulative_yaw;     ///< camera yaw integrated from cmd_vel, radians
+    double stamp;                ///< seconds, from the detection message header
+    Eigen::Vector3d position;    ///< colour optical frame, metres
+    Eigen::Matrix3d covariance;  ///< position covariance, m^2
+    double cumulative_yaw;       ///< camera yaw integrated from cmd_vel, radians
   };
 
   /// Everything remembered about one tracked person between frames.

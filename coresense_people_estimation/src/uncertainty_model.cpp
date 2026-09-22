@@ -54,18 +54,14 @@ Eigen::Matrix3d UncertaintyModel::positionCovariance(const cv::Point3d& ray, con
   const double sigma_z =
       depth.from_bbox_fallback ? noise_floor : std::max(depth_spread_gain_ * depth.spread_m, noise_floor);
 
-  // P = ray * z, so J = [ z/fx * ex , z/fy * ey , ray ] and
-  // Sigma = J diag(su^2, sv^2, sz^2) J^T.
-  const double depth_variance = sigma_z * sigma_z;
-  Eigen::Matrix3d covariance;
-  covariance << depth_variance * ray.x * ray.x, depth_variance * ray.x * ray.y, depth_variance * ray.x * ray.z,
-      depth_variance * ray.y * ray.x, depth_variance * ray.y * ray.y, depth_variance * ray.y * ray.z,
-      depth_variance * ray.z * ray.x, depth_variance * ray.z * ray.y, depth_variance * ray.z * ray.z;
-  const double du = depth.depth_m / fx * sigma_u;
-  const double dv = depth.depth_m / fy * sigma_v;
-  covariance(0, 0) += du * du;
-  covariance(1, 1) += dv * dv;
-  return covariance;
+  // Jacobian of P = ray * z with respect to (u, v, z): the depth term lands
+  // along the ray and the pixel terms across it.
+  Eigen::Matrix3d jacobian;
+  jacobian << depth.depth_m / fx, 0.0, ray.x,  //
+      0.0, depth.depth_m / fy, ray.y,          //
+      0.0, 0.0, ray.z;
+  const Eigen::Vector3d pixel_and_depth_variance{ sigma_u * sigma_u, sigma_v * sigma_v, sigma_z * sigma_z };
+  return jacobian * pixel_and_depth_variance.asDiagonal() * jacobian.transpose();
 }
 
 double UncertaintyModel::reliability(const DepthEstimate& depth, const Eigen::Matrix3d& covariance,
@@ -76,8 +72,7 @@ double UncertaintyModel::reliability(const DepthEstimate& depth, const Eigen::Ma
       std::clamp(depth.valid_frac / std::max(kDenominatorFloor, reliability_valid_frac_full_), 0.0, 1.0);
   const double r_keypoints = std::clamp(
       static_cast<double>(n_valid_keypoints) / std::max(kDenominatorFloor, reliability_keypoints_full_), 0.0, 1.0);
-  const double trace = covariance(0, 0) + covariance(1, 1) + covariance(2, 2);
-  const double r_sigma = reliability_sigma_scale_ / (reliability_sigma_scale_ + std::max(0.0, trace));
+  const double r_sigma = reliability_sigma_scale_ / (reliability_sigma_scale_ + std::max(0.0, covariance.trace()));
   return std::clamp(r_valid * r_keypoints * r_sigma, 0.0, 1.0);
 }
 

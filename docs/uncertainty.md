@@ -7,7 +7,7 @@ bounding box; `σz` is the larger of the measured spread of the depth readings a
 noise floor `coeff · z²`. The depth term elongates the ellipsoid along the line of sight but does
 not always dominate — a tall box at close range can put more uncertainty across the image than
 along the ray — so read the covariance rather than assuming the classic cigar shape. Velocity
-covariance comes from the fit itself, `Var(v) = σ²·n/det` with
+covariance comes from the fit itself, `Var(v) = σ²·[(AᵀA)⁻¹]₀₀` with
 `σ² = ‖Aβ − p‖²/(n−2)` [[1]](https://iate.oac.uncor.edu/~mario/materia/nr/numrec/f15-2.pdf);
 fewer than three samples fit exactly and report `velocity_prior_variance` instead. It is
 conditional on a window selected *because* it fits, so it is optimistically biased.

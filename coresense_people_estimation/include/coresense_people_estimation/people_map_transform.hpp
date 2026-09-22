@@ -14,13 +14,13 @@
 
 #pragma once
 
+#include <Eigen/Core>
 #include <memory>
 #include <optional>
 #include <string>
 
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
-#include "geometry_msgs/msg/vector3.hpp"
 #include "people_msgs/msg/people.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -43,12 +43,12 @@ public:
   struct RobotMotion
   {
     /// Velocity of the robot base frame's origin.
-    geometry_msgs::msg::Vector3 linear;
+    Eigen::Vector3d linear{ Eigen::Vector3d::Zero() };
     /// Angular velocity of the robot base.
-    geometry_msgs::msg::Vector3 angular;
+    Eigen::Vector3d angular{ Eigen::Vector3d::Zero() };
     /// Position of the robot base frame's origin — the point the angular
     /// velocity turns about, and hence the origin of the lever arm.
-    geometry_msgs::msg::Vector3 base_origin;
+    Eigen::Vector3d base_origin{ Eigen::Vector3d::Zero() };
   };
 
   explicit PeopleMapTransform(rclcpp::Node& node);

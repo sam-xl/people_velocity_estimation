@@ -122,7 +122,7 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
     state.cumulative_yaw = cumulative_yaw;
     state.consecutive_holds = 0;
     pruneHistory(state.history, stamp);
-    state.history.push_back(Sample{ stamp, position, covariance.diagonal(), covariance(0, 2), cumulative_yaw });
+    state.history.push_back(Sample{ stamp, position, covariance, cumulative_yaw });
     while (state.history.size() > history_maxlen_)
     {
       state.history.pop_front();
@@ -287,7 +287,7 @@ double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const Ve
   Eigen::MatrixX3d variance(window.size(), 3);
   for (std::size_t i = 0; i < window.size(); ++i)
   {
-    variance.row(i) = (sigma_scale_sq * window[i].variance.array() + gait_var).max(kVarianceFloor);
+    variance.row(i) = (sigma_scale_sq * window[i].covariance.diagonal().array() + gait_var).max(kVarianceFloor);
   }
 
   const Eigen::RowVector3d chi2 = (residual.array().square() / variance.array()).colwise().sum();
@@ -304,19 +304,10 @@ std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sampl
   const double yaw_now = rotated.back().cumulative_yaw;
   for (Sample& sample : rotated)
   {
-    const double angle = yaw_now - sample.cumulative_yaw;
-    sample.position = yawRotation(angle) * sample.position;
-
-    // The uncertainty turns with the point: yawRotation is Ry, so only the x-z
-    // block moves and y is untouched. See the README.
-    const double c = std::cos(angle);
-    const double s = std::sin(angle);
-    const double xx = sample.variance[0];
-    const double zz = sample.variance[2];
-    const double xz = sample.covariance_xz;
-    sample.variance[0] = c * c * xx + 2.0 * c * s * xz + s * s * zz;
-    sample.variance[2] = s * s * xx - 2.0 * c * s * xz + c * c * zz;
-    sample.covariance_xz = (c * c - s * s) * xz + c * s * (zz - xx);
+    const Eigen::Matrix3d rotation = yawRotation(yaw_now - sample.cumulative_yaw);
+    sample.position = rotation * sample.position;
+    // The uncertainty turns with the point. See the README.
+    sample.covariance = rotation * sample.covariance * rotation.transpose();
   }
   return rotated;
 }

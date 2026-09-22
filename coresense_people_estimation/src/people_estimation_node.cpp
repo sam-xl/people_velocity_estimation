@@ -246,10 +246,10 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
 
   // The untransformed input, kept only to be drawn next to the output, so the
   // copy is paid for only when someone is looking.
-  people_msgs::msg::People raw;
+  people_msgs::msg::People sensor_frame_people;
   if (debug_->showsRaw())
   {
-    raw = people;
+    sensor_frame_people = people;
   }
 
   // Everything above is in the colour optical frame. A message that cannot be
@@ -298,7 +298,7 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
   {
     robot = DebugVisualizer::RobotArrow{ motion->base_origin, motion->linear };
   }
-  debug_->publish(people, raw, robot);
+  debug_->publish(people, sensor_frame_people, robot);
 }
 
 bool PeopleEstimationNode::inCameraView(const geometry_msgs::msg::Point& position,

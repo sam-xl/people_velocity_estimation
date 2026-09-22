@@ -174,7 +174,8 @@ DebugVisualizer::DebugVisualizer(rclcpp::Node& node, bool gravity_aligned)
               debug_marker_pub_->get_topic_name(), debug_person_frames_ ? "yes" : "no", debug_show_raw_ ? "yes" : "no");
 }
 
-void DebugVisualizer::publish(const people_msgs::msg::People& people, const people_msgs::msg::People& raw,
+void DebugVisualizer::publish(const people_msgs::msg::People& people,
+                              const people_msgs::msg::People& sensor_frame_people,
                               const std::optional<RobotArrow>& robot)
 {
   if (!debug_)
@@ -233,12 +234,13 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
   // compensation is.
   if (debug_show_raw_)
   {
-    for (std::size_t i = 0; i < raw.people.size(); ++i)
+    for (std::size_t i = 0; i < sensor_frame_people.people.size(); ++i)
     {
-      const auto& person = raw.people[i];
+      const auto& person = sensor_frame_people.people[i];
       const int id = static_cast<int>(i);
 
-      auto sphere = makeMarker(raw.header, kNsRawPeople, id, type_sphere, kRawPersonColor, debug_marker_lifetime_);
+      auto sphere = makeMarker(sensor_frame_people.header, kNsRawPeople, id, type_sphere, kRawPersonColor,
+                               debug_marker_lifetime_);
       sphere.pose.position = person.position;
       sphere.scale.x = sphere.scale.y = sphere.scale.z = 2.0 * debug_person_radius_;
       array.markers.push_back(std::move(sphere));
@@ -247,7 +249,8 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
       tf2::fromMsg(person.position, position);
       Eigen::Vector3d velocity;
       tf2::fromMsg(person.velocity, velocity);
-      auto arrow = makeMarker(raw.header, kNsRawVelocity, id, type_arrow, kRawVelocityColor, debug_marker_lifetime_);
+      auto arrow = makeMarker(sensor_frame_people.header, kNsRawVelocity, id, type_arrow, kRawVelocityColor,
+                              debug_marker_lifetime_);
       if (setArrow(arrow, position, debug_velocity_scale_ * velocity, debug_person_radius_))
       {
         arrow.id = static_cast<int>(raw_velocity_count++);
@@ -273,7 +276,7 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people, const peop
   reapStaleMarkers(array, kNsPeople, people.people.size());
   reapStaleMarkers(array, kNsVelocity, velocity_count);
   reapStaleMarkers(array, kNsLabel, people.people.size());
-  reapStaleMarkers(array, kNsRawPeople, debug_show_raw_ ? raw.people.size() : 0);
+  reapStaleMarkers(array, kNsRawPeople, debug_show_raw_ ? sensor_frame_people.people.size() : 0);
   reapStaleMarkers(array, kNsRawVelocity, raw_velocity_count);
   reapStaleMarkers(array, kNsRobot, robot_count);
 

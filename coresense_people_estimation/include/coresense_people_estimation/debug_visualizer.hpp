@@ -65,10 +65,10 @@ public:
   }
 
   /// Draws one frame's worth of geometry: a sphere, a look-ahead arrow and a
-  /// label per person in `people`, the untransformed `raw` alongside in its own
-  /// sensor frame, and the robot velocity that turned one into the other. No-op
+  /// label per person in `people`, the untransformed `sensor_frame_people`
+  /// alongside, and the robot velocity that turned one into the other. No-op
   /// unless `debug` is set.
-  void publish(const people_msgs::msg::People& people, const people_msgs::msg::People& raw,
+  void publish(const people_msgs::msg::People& people, const people_msgs::msg::People& sensor_frame_people,
                const std::optional<RobotArrow>& robot);
 
 private:

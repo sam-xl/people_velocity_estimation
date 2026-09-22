@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <array>
+#include <Eigen/Core>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -83,8 +83,8 @@ private:
   /// of its measured spread and the sensor noise floor. Only the velocity
   /// window's consistency test reads it, and that test is per axis, so the
   /// cross terms are not carried. See the README.
-  std::array<double, 3> positionVariance(const cv::Point3d& ray, const DepthEstimate& depth, double bbox_width,
-                                         double bbox_height, double fx, double fy) const;
+  Eigen::Vector3d positionVariance(const cv::Point3d& ray, const DepthEstimate& depth, double bbox_width,
+                                   double bbox_height, double fx, double fy) const;
 
   /// One detection, all the way to a `Person` — or `std::nullopt` when the depth
   /// is unusable. Mutates the tracker.

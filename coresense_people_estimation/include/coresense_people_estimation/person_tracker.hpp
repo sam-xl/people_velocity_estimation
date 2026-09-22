@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <array>
+#include <Eigen/Core>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -32,15 +32,16 @@ constexpr std::size_t kMinFitSamples = 3;
 /// Result of fitting a straight line through a track's position history.
 struct VelocityFit
 {
-  std::array<double, 3> velocity{ { 0.0, 0.0, 0.0 } };
-  std::array<double, 3> variance{ { 0.0, 0.0, 0.0 } };
+  Eigen::Vector3d velocity{ Eigen::Vector3d::Zero() };
+  Eigen::Vector3d intercept{ Eigen::Vector3d::Zero() };  ///< position at the window's first stamp
+  Eigen::Vector3d variance{ Eigen::Vector3d::Zero() };
   std::size_t n_samples{ 0 };
 };
 
 /// What to publish for one track this frame.
 struct TrackUpdate
 {
-  std::array<double, 3> position;
+  Eigen::Vector3d position;
   VelocityFit fit;
   double window_s;  ///< time span of the samples the fit came from
 };
@@ -62,8 +63,8 @@ public:
   /// Fold this frame's reading into `track_id` and report what to publish for it.
   /// `variance` is the per-axis position variance the window's consistency test
   /// judges residuals against; see the README.
-  TrackUpdate update(std::int32_t track_id, double stamp, const std::array<double, 3>& position,
-                     const std::array<double, 3>& variance, double cumulative_yaw);
+  TrackUpdate update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
+                     const Eigen::Vector3d& variance, double cumulative_yaw);
 
   /// Forget tracks too old to contribute, so churning ids cannot grow the map.
   void dropStale(double now);
@@ -77,10 +78,10 @@ private:
   /// One observation of a track.
   struct Sample
   {
-    double stamp;                    ///< seconds, from the detection message header
-    std::array<double, 3> position;  ///< colour optical frame, metres
-    std::array<double, 3> variance;  ///< per-axis position variance, m^2
-    double cumulative_yaw;           ///< camera yaw integrated from cmd_vel, radians
+    double stamp;              ///< seconds, from the detection message header
+    Eigen::Vector3d position;  ///< colour optical frame, metres
+    Eigen::Vector3d variance;  ///< per-axis position variance, m^2
+    double cumulative_yaw;     ///< camera yaw integrated from cmd_vel, radians
   };
 
   /// Everything remembered about one tracked person between frames.
@@ -109,6 +110,10 @@ private:
   double windowChiSquare(const std::deque<Sample>& window, const VelocityFit& fit) const;
 
   VelocityFit fitVelocity(const std::deque<Sample>& history) const;
+  /// Rows of p(t) = v t + b: `[t, 1]`, with t measured from the first sample.
+  static Eigen::MatrixX2d designMatrix(const std::deque<Sample>& history);
+  /// One row per sample, one column per axis.
+  static Eigen::MatrixX3d positions(const std::deque<Sample>& history);
   /// Every sample brought into the newest sample's camera frame.
   std::deque<Sample> derotate(const std::deque<Sample>& history) const;
 

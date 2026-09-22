@@ -97,7 +97,7 @@ visualization_msgs::msg::Marker makeMarker(const std_msgs::msg::Header& header, 
 bool setArrow(visualization_msgs::msg::Marker& marker, const geometry_msgs::msg::Point& start, double dx, double dy,
               double dz, double radius)
 {
-  if (std::hypot(std::hypot(dx, dy), dz) < kMinArrowLength)
+  if (std::hypot(dx, dy, dz) < kMinArrowLength)
   {
     return false;
   }
@@ -194,7 +194,7 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
     array.markers.push_back(std::move(sphere));
 
     // Velocity, as a look-ahead arrow.
-    const double speed = std::hypot(std::hypot(person.velocity.x, person.velocity.y), person.velocity.z);
+    const double speed = std::hypot(person.velocity.x, person.velocity.y, person.velocity.z);
     auto arrow = makeMarker(people.header, kNsVelocity, id, type_arrow, kVelocityColor, debug_marker_lifetime_);
     if (setArrow(arrow, person.position, person.velocity.x * debug_velocity_scale_,
                  person.velocity.y * debug_velocity_scale_, person.velocity.z * debug_velocity_scale_,

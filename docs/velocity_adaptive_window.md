@@ -65,7 +65,7 @@ yawed to `atan2(vx, vz)` about optical −y. Below `velocity_min_span_s` of hist
 velocity at all, so a new track reports zero with `velocity_prior_variance`. A track unseen for
 longer than `velocity_max_gap_s` has its history cleared rather than a slope fitted across the hole.
 
-Velocity covariance comes from the fit itself, `Var(v) = σ²·n/det` with
+Velocity covariance comes from the fit itself, `Var(v) = σ²·[(AᵀA)⁻¹]₀₀` with
 `σ² = ‖Aβ − p‖²/(n−2)` [[1]](https://iate.oac.uncor.edu/~mario/materia/nr/numrec/f15-2.pdf);
 fewer than three samples fit exactly and report `velocity_prior_variance` instead. It is
 conditional on a window selected *because* it fits, so it is optimistically biased.

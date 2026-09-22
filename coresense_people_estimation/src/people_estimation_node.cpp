@@ -14,6 +14,7 @@
 
 #include "coresense_people_estimation/people_estimation_node.hpp"
 
+#include <Eigen/Core>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -43,6 +44,7 @@
 #include "sensor_msgs/image_encodings.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 
 namespace
 {
@@ -272,9 +274,9 @@ std::optional<cv::Mat> PeopleEstimationNode::decodeDepth(const sensor_msgs::msg:
   return depth_m;
 }
 
-std::array<double, 3> PeopleEstimationNode::positionVariance(const cv::Point3d& ray, const DepthEstimate& depth,
-                                                             double bbox_width, double bbox_height, double fx,
-                                                             double fy) const
+Eigen::Vector3d PeopleEstimationNode::positionVariance(const cv::Point3d& ray, const DepthEstimate& depth,
+                                                       double bbox_width, double bbox_height, double fx,
+                                                       double fy) const
 {
   const double sigma_u = pixel_sigma_frac_ * bbox_width;
   const double sigma_v = pixel_sigma_frac_ * bbox_height;
@@ -284,13 +286,15 @@ std::array<double, 3> PeopleEstimationNode::positionVariance(const cv::Point3d& 
   const double sigma_z =
       depth.from_bbox_fallback ? noise_floor : std::max(depth_spread_gain_ * depth.spread_m, noise_floor);
 
-  // P = ray * z, so the depth term lands along the ray and the pixel terms
-  // across it. Diagonal only: the window test reads one axis at a time.
-  const double du = depth.depth_m / fx * sigma_u;
-  const double dv = depth.depth_m / fy * sigma_v;
-  const double depth_variance = sigma_z * sigma_z;
-  return { { du * du + depth_variance * ray.x * ray.x, dv * dv + depth_variance * ray.y * ray.y,
-             depth_variance * ray.z * ray.z } };
+  // Jacobian of P = ray * z with respect to (u, v, z): the depth term lands
+  // along the ray and the pixel terms across it. Diagonal only: the window
+  // test reads one axis at a time.
+  Eigen::Matrix3d jacobian;
+  jacobian << depth.depth_m / fx, 0.0, ray.x,  //
+      0.0, depth.depth_m / fy, ray.y,          //
+      0.0, 0.0, ray.z;
+  const Eigen::Vector3d pixel_and_depth_variance{ sigma_u * sigma_u, sigma_v * sigma_v, sigma_z * sigma_z };
+  return (jacobian * pixel_and_depth_variance.asDiagonal() * jacobian.transpose()).diagonal();
 }
 
 std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
@@ -315,11 +319,11 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     fy = camera_model_.fy();
   }
 
-  const std::array<double, 3> position{ { ray.x * depth.depth_m, ray.y * depth.depth_m, ray.z * depth.depth_m } };
+  const Eigen::Vector3d position = Eigen::Vector3d(ray.x, ray.y, ray.z) * depth.depth_m;
 
   const double bbox_width = std::abs(static_cast<double>(detection.bbox[2] - detection.bbox[0]));
   const double bbox_height = std::abs(static_cast<double>(detection.bbox[3] - detection.bbox[1]));
-  const std::array<double, 3> variance = positionVariance(ray, depth, bbox_width, bbox_height, fx, fy);
+  const Eigen::Vector3d variance = positionVariance(ray, depth, bbox_width, bbox_height, fx, fy);
 
   // ByteTrack reports every unassociated detection as -1; those have no identity
   // to hold a history against, so they pass through as measured, with the velocity
@@ -332,12 +336,8 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   people_msgs::msg::Person person;
   person.name = detection.track_id >= 0 ? "person_" + std::to_string(detection.track_id) :
                                           "person_untracked_" + std::to_string(untracked_in_message_++);
-  person.position.x = update.position[0];
-  person.position.y = update.position[1];
-  person.position.z = update.position[2];
-  person.velocity.x = update.fit.velocity[0];
-  person.velocity.y = update.fit.velocity[1];
-  person.velocity.z = update.fit.velocity[2];
+  person.position = tf2::toMsg(update.position);
+  person.velocity = tf2::toMsg(update.fit.velocity);
   // Every detection that got this far is equally believed: there is no model yet
   // of how confident this measurement is.
   person.reliability = 1.0;

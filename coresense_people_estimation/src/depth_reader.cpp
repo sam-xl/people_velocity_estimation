@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <opencv2/core.hpp>
 #include <vector>
 
@@ -40,6 +41,17 @@ double percentile(std::vector<float>& values, double percent)
   auto nth = values.begin() + static_cast<std::ptrdiff_t>(index);
   std::nth_element(values.begin(), nth, values.end());
   return static_cast<double>(*nth);
+}
+
+/// Appends every finite reading of `patch` inside [min_m, max_m] to `valid`.
+void collectValidDepths(const cv::Mat& patch, double min_m, double max_m, std::vector<float>& valid)
+{
+  for (int y = 0; y < patch.rows; ++y)
+  {
+    const float* row = patch.ptr<float>(y);
+    std::copy_if(row, row + patch.cols, std::back_inserter(valid),
+                 [min_m, max_m](float d) { return std::isfinite(d) && d >= min_m && d <= max_m; });
+  }
 }
 }  // namespace
 
@@ -79,6 +91,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
   // the person's depth.
   static constexpr std::array<std::size_t, 4> kTorso{ { kLeftShoulder, kRightShoulder, kLeftHip, kRightHip } };
 
+  const cv::Rect image(0, 0, depth_m.cols, depth_m.rows);
   std::vector<float> valid;
   std::size_t sampled = 0;
 
@@ -88,26 +101,14 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
     {
       continue;
     }
-    const double u = detection.keypoints[2 * k];
-    const double v = detection.keypoints[2 * k + 1];
+    const cv::Point centre(static_cast<int>(std::lround(detection.keypoints[2 * k])),
+                           static_cast<int>(std::lround(detection.keypoints[2 * k + 1])));
     // A patch rather than a single pixel: depth images are speckled with dropouts.
-    const int u0 = std::max(0, static_cast<int>(std::lround(u)) - keypoint_patch_radius_);
-    const int u1 = std::min(depth_m.cols - 1, static_cast<int>(std::lround(u)) + keypoint_patch_radius_);
-    const int v0 = std::max(0, static_cast<int>(std::lround(v)) - keypoint_patch_radius_);
-    const int v1 = std::min(depth_m.rows - 1, static_cast<int>(std::lround(v)) + keypoint_patch_radius_);
-
-    for (int y = v0; y <= v1; ++y)
-    {
-      for (int x = u0; x <= u1; ++x)
-      {
-        ++sampled;
-        const float d = depth_m.at<float>(y, x);
-        if (std::isfinite(d) && d >= depth_min_m_ && d <= depth_max_m_)
-        {
-          valid.push_back(d);
-        }
-      }
-    }
+    const int side = 2 * keypoint_patch_radius_ + 1;
+    const cv::Rect patch =
+        cv::Rect(centre.x - keypoint_patch_radius_, centre.y - keypoint_patch_radius_, side, side) & image;
+    sampled += static_cast<std::size_t>(patch.area());
+    collectValidDepths(depth_m(patch), depth_min_m_, depth_max_m_, valid);
   }
 
   if (!valid.empty() && sampled > 0)
@@ -121,37 +122,20 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
 
   // ── Fallback: the whole bounding box ────────────────────────────────────────
   // A worse estimate beats dropping a person nav2 should be avoiding.
-  const int x0 = std::clamp(detection.bbox[0], 0, depth_m.cols - 1);
-  const int y0 = std::clamp(detection.bbox[1], 0, depth_m.rows - 1);
-  const int x1 = std::clamp(detection.bbox[2], 0, depth_m.cols - 1);
-  const int y1 = std::clamp(detection.bbox[3], 0, depth_m.rows - 1);
-  // Clamping collapses a box that misses the image entirely onto the edge pixel,
-  // so overlap is tested before it. A one-pixel-wide box is legitimate: the
-  // sampling loops below are inclusive.
-  const bool overlaps_image = detection.bbox[2] >= 0 && detection.bbox[0] < depth_m.cols && detection.bbox[3] >= 0 &&
-                              detection.bbox[1] < depth_m.rows;
-  if (!overlaps_image || x1 < x0 || y1 < y0)
+  // Inclusive corners, so the box is one pixel wider than its corner difference;
+  // an inverted box has a negative width and intersects to nothing.
+  const cv::Rect bbox = cv::Rect(detection.bbox[0], detection.bbox[1], detection.bbox[2] - detection.bbox[0] + 1,
+                                 detection.bbox[3] - detection.bbox[1] + 1) &
+                        image;
+  if (bbox.empty())
   {
     return DepthEstimate{ 0.0, 0.0, 0.0, true };
   }
-
-  // Multiply in std::size_t rather than widening the int product.
-  const auto bbox_sampled = static_cast<std::size_t>(x1 - x0 + 1) * static_cast<std::size_t>(y1 - y0 + 1);
+  const auto bbox_sampled = static_cast<std::size_t>(bbox.area());
 
   valid.clear();
   valid.reserve(bbox_sampled);
-  for (int y = y0; y <= y1; ++y)
-  {
-    for (int x = x0; x <= x1; ++x)
-    {
-      const float d = depth_m.at<float>(y, x);
-      if (std::isfinite(d) && d >= depth_min_m_ && d <= depth_max_m_)
-      {
-        valid.push_back(d);
-      }
-    }
-  }
-
+  collectValidDepths(depth_m(bbox), depth_min_m_, depth_max_m_, valid);
   if (valid.empty())
   {
     return DepthEstimate{ 0.0, 0.0, 0.0, true };

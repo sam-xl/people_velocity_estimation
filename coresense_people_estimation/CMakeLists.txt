@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(image_geometry REQUIRED)
 find_package(message_filters REQUIRED)
@@ -17,6 +18,7 @@ find_package(rclcpp_components REQUIRED)
 find_package(riskam_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_eigen REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -35,6 +37,7 @@ target_include_directories(${PROJECT_NAME}_component
 target_link_libraries(${PROJECT_NAME}_component
   PUBLIC
   cv_bridge::cv_bridge
+  Eigen3::Eigen
   ${geometry_msgs_TARGETS}
   image_geometry::image_geometry
   message_filters::message_filters
@@ -44,6 +47,7 @@ target_link_libraries(${PROJECT_NAME}_component
   ${riskam_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   tf2::tf2
+  tf2_eigen::tf2_eigen
   tf2_geometry_msgs::tf2_geometry_msgs
   tf2_ros::tf2_ros
   ${visualization_msgs_TARGETS}
@@ -76,6 +80,7 @@ ament_export_include_directories(include)
 ament_export_targets(export_${PROJECT_NAME})
 ament_export_dependencies(
   cv_bridge
+  Eigen3
   geometry_msgs
   image_geometry
   message_filters
@@ -85,6 +90,7 @@ ament_export_dependencies(
   riskam_msgs
   sensor_msgs
   tf2
+  tf2_eigen
   tf2_geometry_msgs
   tf2_ros
   visualization_msgs

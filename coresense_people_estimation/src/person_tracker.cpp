@@ -14,8 +14,8 @@
 
 #include "coresense_people_estimation/person_tracker.hpp"
 
+#include <Eigen/Dense>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -33,22 +33,12 @@ constexpr std::size_t kMinChiSquareSamples = 4;
 /// Keeps a residual out of a division by a vanishing variance.
 constexpr double kVarianceFloor = 1e-12;
 
-/// Below this the normal equations are singular: every sample shares a timestamp.
-constexpr double kSingularDetEpsilon = 1e-12;
-
-double norm3(const std::array<double, 3>& v)
+/// Rotation about the camera's vertical by a robot yaw of `angle`. The colour
+/// optical frame is x-right, y-down, z-forward, so the yaw axis is optical -y
+/// and a left turn works out to Ry(+angle). Pitch and roll are ignored.
+Eigen::Matrix3d yawRotation(double angle)
 {
-  return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-}
-
-/// Rotation of a point about the camera's vertical, by a robot yaw of `angle`.
-/// The colour optical frame is x-right, y-down, z-forward, so the yaw axis is
-/// optical -y and a left turn works out to Ry(+angle). Pitch and roll are ignored.
-std::array<double, 3> rotateByYaw(const std::array<double, 3>& p, double angle)
-{
-  const double c = std::cos(angle);
-  const double s = std::sin(angle);
-  return { { c * p[0] + s * p[2], p[1], -s * p[0] + c * p[2] } };
+  return Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitY()).toRotationMatrix();
 }
 }  // namespace
 
@@ -77,8 +67,8 @@ PersonTracker::PersonTracker(rclcpp::Node& node)
   history_maxlen_ = static_cast<std::size_t>(std::max(declared_maxlen, static_cast<std::int64_t>(kMinFitSamples)));
 }
 
-TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const std::array<double, 3>& position,
-                                  const std::array<double, 3>& variance, double cumulative_yaw)
+TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
+                                  const Eigen::Vector3d& variance, double cumulative_yaw)
 {
   Track& track = tracks_[track_id];
 
@@ -98,7 +88,7 @@ TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const std
 VelocityFit PersonTracker::priorFit() const
 {
   VelocityFit fit;
-  fit.variance = { { velocity_prior_variance_, velocity_prior_variance_, velocity_prior_variance_ } };
+  fit.variance.setConstant(velocity_prior_variance_);
   return fit;
 }
 
@@ -120,9 +110,9 @@ PersonTracker::AdaptiveFit PersonTracker::fitAdaptive(const std::deque<Sample>& 
 
   // Under the noise floor there is no direction, only the residual wobble of a
   // person standing still. See the README.
-  if (norm3(result.fit.velocity) < velocity_epsilon_)
+  if (result.fit.velocity.norm() < velocity_epsilon_)
   {
-    result.fit.velocity = { { 0.0, 0.0, 0.0 } };
+    result.fit.velocity.setZero();
   }
   return result;
 }
@@ -164,40 +154,23 @@ double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const Ve
     return 0.0;
   }
   const auto n = static_cast<double>(window.size());
-  const double t0 = window.front().stamp;
+
+  Eigen::Matrix<double, 2, 3> coefficients;
+  coefficients << fit.velocity.transpose(), fit.intercept.transpose();
+  const Eigen::MatrixX3d residual = positions(window) - designMatrix(window) * coefficients;
 
   // Residuals are judged against frame-to-frame repeatability rather than the
   // absolute position error, with gait as the floor under it. See the README.
   const double gait_var = velocity_gait_sigma_m_ * velocity_gait_sigma_m_;
   const double sigma_scale_sq = velocity_window_sigma_scale_ * velocity_window_sigma_scale_;
-
-  // Intercept per axis, from the same normal equations fitVelocity solved.
-  std::array<double, 3> mean_p{ { 0.0, 0.0, 0.0 } };
-  double mean_t = 0.0;
-  for (const Sample& sample : window)
+  Eigen::MatrixX3d variance(window.size(), 3);
+  for (std::size_t i = 0; i < window.size(); ++i)
   {
-    mean_t += (sample.stamp - t0) / n;
-    for (std::size_t axis = 0; axis < 3; ++axis)
-    {
-      mean_p[axis] += sample.position[axis] / n;
-    }
+    variance.row(i) = (sigma_scale_sq * window[i].variance.array() + gait_var).max(kVarianceFloor);
   }
 
-  double worst = 0.0;
-  for (std::size_t axis = 0; axis < 3; ++axis)
-  {
-    double chi2 = 0.0;
-    for (const Sample& sample : window)
-    {
-      const double t = sample.stamp - t0;
-      const double model = mean_p[axis] + fit.velocity[axis] * (t - mean_t);
-      const double residual = sample.position[axis] - model;
-      const double variance = sigma_scale_sq * sample.variance[axis] + gait_var;
-      chi2 += residual * residual / std::max(kVarianceFloor, variance);
-    }
-    worst = std::max(worst, chi2 / (n - 2.0));
-  }
-  return worst;
+  const Eigen::RowVector3d chi2 = (residual.array().square() / variance.array()).colwise().sum();
+  return chi2.maxCoeff() / (n - 2.0);
 }
 
 std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sample>& history) const
@@ -210,19 +183,12 @@ std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sampl
   const double yaw_now = rotated.back().cumulative_yaw;
   for (Sample& sample : rotated)
   {
-    const double angle = yaw_now - sample.cumulative_yaw;
-    sample.position = rotateByYaw(sample.position, angle);
-
-    // The uncertainty turns with the point: rotateByYaw is Ry, so only the x-z
-    // block moves and y is untouched. The variances are per-axis, so the turned
-    // pair is a mix of the two — exact only while the x-z cross-covariance is
-    // negligible, which is why it is an approximation here. See the README.
-    const double c = std::cos(angle);
-    const double s = std::sin(angle);
-    const double xx = sample.variance[0];
-    const double zz = sample.variance[2];
-    sample.variance[0] = c * c * xx + s * s * zz;
-    sample.variance[2] = s * s * xx + c * c * zz;
+    const Eigen::Matrix3d rotation = yawRotation(yaw_now - sample.cumulative_yaw);
+    sample.position = rotation * sample.position;
+    // The uncertainty turns with the point. The variances are per-axis, so the
+    // x-z cross-covariance the turn creates is dropped again — exact only while
+    // it is negligible. See the README.
+    sample.variance = (rotation * sample.variance.asDiagonal() * rotation.transpose()).diagonal();
   }
   return rotated;
 }
@@ -237,40 +203,19 @@ VelocityFit PersonTracker::fitVelocity(const std::deque<Sample>& history) const
     return fit;
   }
 
-  // Least squares for p(t) = v t + b, per axis. A = [t, 1], so
-  // (A^T A)^-1 = 1/det * [[n, -S_t], [-S_t, S_tt]] with det = n S_tt - S_t^2,
-  // and Var(v) = sigma^2 * n / det.
-  const double t0 = history.front().stamp;
-  const auto n = static_cast<double>(history.size());
-  double s_t = 0.0;
-  double s_tt = 0.0;
-  std::array<double, 3> s_p{ { 0.0, 0.0, 0.0 } };
-  std::array<double, 3> s_tp{ { 0.0, 0.0, 0.0 } };
-
-  for (const Sample& sample : history)
-  {
-    const double t = sample.stamp - t0;
-    s_t += t;
-    s_tt += t * t;
-    for (std::size_t axis = 0; axis < 3; ++axis)
-    {
-      s_p[axis] += sample.position[axis];
-      s_tp[axis] += t * sample.position[axis];
-    }
-  }
-
-  const double det = n * s_tt - s_t * s_t;
-  if (std::abs(det) < kSingularDetEpsilon)
+  // Least squares for p(t) = v t + b, one column per axis.
+  const Eigen::MatrixX2d design = designMatrix(history);
+  const Eigen::MatrixX3d observed = positions(history);
+  const Eigen::ColPivHouseholderQR<Eigen::MatrixX2d> qr(design);
+  if (qr.rank() < 2)
   {
     // Every sample shares a timestamp: no time base, so no slope.
     fit.variance = priorFit().variance;
     return fit;
   }
-
-  for (std::size_t axis = 0; axis < 3; ++axis)
-  {
-    fit.velocity[axis] = (n * s_tp[axis] - s_t * s_p[axis]) / det;
-  }
+  const Eigen::Matrix<double, 2, 3> coefficients = qr.solve(observed);
+  fit.velocity = coefficients.row(0);
+  fit.intercept = coefficients.row(1);
 
   if (history.size() < kMinFitSamples)
   {
@@ -279,20 +224,34 @@ VelocityFit PersonTracker::fitVelocity(const std::deque<Sample>& history) const
     return fit;
   }
 
-  std::array<double, 3> residual_sq{ { 0.0, 0.0, 0.0 } };
-  for (std::size_t axis = 0; axis < 3; ++axis)
-  {
-    const double intercept = (s_tt * s_p[axis] - s_t * s_tp[axis]) / det;
-    for (const Sample& sample : history)
-    {
-      const double t = sample.stamp - t0;
-      const double r = fit.velocity[axis] * t + intercept - sample.position[axis];
-      residual_sq[axis] += r * r;
-    }
-    const double sigma_sq = residual_sq[axis] / (n - 2.0);
-    fit.variance[axis] = sigma_sq * n / det;
-  }
+  // Var(v) = sigma^2 (A^T A)^-1_00, with sigma^2 the residual variance at n - 2
+  // degrees of freedom.
+  const auto n = static_cast<double>(history.size());
+  const Eigen::Vector3d residual_sq = (observed - design * coefficients).colwise().squaredNorm();
+  const double slope_gain = (design.transpose() * design).inverse()(0, 0);
+  fit.variance = residual_sq / (n - 2.0) * slope_gain;
   return fit;
+}
+
+Eigen::MatrixX2d PersonTracker::designMatrix(const std::deque<Sample>& history)
+{
+  Eigen::MatrixX2d design(history.size(), 2);
+  const double t0 = history.front().stamp;
+  for (std::size_t i = 0; i < history.size(); ++i)
+  {
+    design.row(i) << history[i].stamp - t0, 1.0;
+  }
+  return design;
+}
+
+Eigen::MatrixX3d PersonTracker::positions(const std::deque<Sample>& history)
+{
+  Eigen::MatrixX3d observed(history.size(), 3);
+  for (std::size_t i = 0; i < history.size(); ++i)
+  {
+    observed.row(i) = history[i].position;
+  }
+  return observed;
 }
 
 void PersonTracker::pruneHistory(std::deque<Sample>& history, double now) const

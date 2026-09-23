@@ -42,25 +42,38 @@ struct VelocityFit
 struct TrackUpdate
 {
   Eigen::Vector3d position;
+  Eigen::Vector3d variance;
+  /// Zero when the values above are this frame's measurement, else how many
+  /// consecutive frames they have been held for.
+  std::size_t hold_frames;
   VelocityFit fit;
   double window_s;  ///< time span of the samples the fit came from
+
+  /// For a detection carrying no track id: published as measured, never held,
+  /// with no history behind the velocity. Named because `position` and
+  /// `variance` are the same type and transposing them would still compile.
+  static TrackUpdate untracked(const Eigen::Vector3d& position, const Eigen::Vector3d& variance, const VelocityFit& fit)
+  {
+    return TrackUpdate{ position, variance, 0, fit, 0.0 };
+  }
 };
 
 /// Remembers where each tracked person has been, and turns that into a velocity.
 ///
-/// The velocity is a least-squares slope through the trailing samples of a
-/// track, over a window chosen per track and per frame: as much history as still
-/// looks like one constant velocity, and no more. See the README.
+/// Two jobs that cannot be separated: a reading implying an impossible speed is
+/// rejected as a depth error, and rejecting it is also what keeps it out of the
+/// history the velocity is differentiated from. See the README.
 ///
-/// Not a node: it declares its parameters on the owning node. The camera's own
-/// yaw is passed in rather than integrated here, because the node already
-/// latches the `cmd_vel` it comes from.
+/// Not a node: it declares its parameters on the owning node and logs through it.
+/// The camera's own yaw is passed in rather than integrated here, because the
+/// node already latches the `cmd_vel` it comes from.
 class PersonTracker
 {
 public:
   explicit PersonTracker(rclcpp::Node& node);
 
-  /// Fold this frame's reading into `track_id` and report what to publish for it.
+  /// Fold this frame's reading into `track_id` and report what to publish for it:
+  /// the measurement or a held one, and the velocity that goes with it.
   /// `variance` is the per-axis position variance the window's consistency test
   /// judges residuals against; see the README.
   TrackUpdate update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
@@ -75,7 +88,7 @@ public:
   VelocityFit priorFit() const;
 
 private:
-  /// One observation of a track.
+  /// One accepted observation of a track; a held frame is never a sample.
   struct Sample
   {
     double stamp;              ///< seconds, from the detection message header
@@ -87,7 +100,42 @@ private:
   /// Everything remembered about one tracked person between frames.
   struct Track
   {
-    std::deque<Sample> history;  ///< accepted samples, oldest first
+    /// The most recent reading the spike filter accepted, republished while its
+    /// successors are rejected.
+    double stamp{ 0.0 };                 ///< seconds, from the detection message header
+    Eigen::Vector3d position{};          ///< colour optical frame, metres
+    Eigen::Vector3d variance{};          ///< per-axis, as handed to update()
+    double cumulative_yaw{ 0.0 };        ///< camera yaw when `position` was accepted
+    std::size_t consecutive_holds{ 0 };  ///< rejections since, bounded by `spike_max_holds`
+
+    /// Refreshed on every sighting, held frames included, so how long a track has
+    /// been gone is judged on when it was last seen rather than last believed.
+    double seen_stamp{ 0.0 };
+
+    std::deque<Sample> history;   ///< accepted samples, oldest first, never a held frame
+    VelocityFit last_fit;         ///< republished whole while the position is held
+    double last_window_s{ 0.0 };  ///< span of the window `last_fit` came from
+  };
+
+  /// What to publish for one detection, once the spike filter has had its say.
+  struct FilteredPosition
+  {
+    Eigen::Vector3d position;
+    Eigen::Vector3d variance;
+    std::size_t hold_frames;
+
+    // Named rather than brace-initialised at the call sites: the two arrays are
+    // the same type, so a transposition would compile and silently swap the
+    // covariance onto the position.
+    static FilteredPosition measured(const Eigen::Vector3d& position, const Eigen::Vector3d& variance)
+    {
+      return FilteredPosition{ position, variance, 0 };
+    }
+    static FilteredPosition held(const Eigen::Vector3d& position, const Eigen::Vector3d& variance,
+                                 std::size_t hold_frames)
+    {
+      return FilteredPosition{ position, variance, hold_frames };
+    }
   };
 
   /// One track's velocity, and the window it was measured over.
@@ -96,6 +144,11 @@ private:
     VelocityFit fit;
     double window_s{ 0.0 };
   };
+
+  /// Accept this frame's reading for a track, or reject it as a spike and
+  /// republish the last accepted one.
+  FilteredPosition filterPosition(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
+                                  const Eigen::Vector3d& variance, double cumulative_yaw);
 
   /// Velocity over an adaptively chosen window: as much history as stays
   /// consistent with one constant velocity, and no more.
@@ -121,6 +174,9 @@ private:
   /// gap long enough that the track may not be the same person any more.
   void pruneHistory(std::deque<Sample>& history, double now) const;
 
+  /// Logger and clock come from it.
+  rclcpp::Node& node_;
+
   std::unordered_map<std::int32_t, Track> tracks_;
 
   // ── Parameters ──────────────────────────────────────────────────────────────
@@ -135,6 +191,9 @@ private:
   double velocity_epsilon_;
   double velocity_max_gap_s_;
   std::size_t history_maxlen_;
+  double max_person_speed_;
+  double spike_reset_timeout_;
+  std::size_t spike_max_holds_;
 };
 
 }  // namespace coresense_people_estimation

@@ -23,8 +23,12 @@ publisher nor the broadcaster is created.
 **Reading it.** Remember the frame is optical: x right, y down, z forward. A person 3 m in front
 of the camera sits at `z ≈ 3`, not `x ≈ 3`.
 
-- **A person sits metres too far away** → the depth read landed on background. Check that
-  `depth_topic` is the *aligned* image and watch `depth_valid_frac` in the tags.
+- **A person sits metres too far away** → the depth read landed on background, and the spike
+  filter did not catch it. Check that `depth_topic` is the *aligned* image, and watch
+  `depth_valid_frac` and `position_hold_frames` in the tags.
+- **A person on a poster is drawn** → the plausibility filter is not rejecting them.
+  `background_frac` in the tags is what it measured; compare it with
+  `background_min_far_frac`.
 - **Arrows jitter while somebody walks in a straight line** → the window is collapsing when it
   should not. Set `publish_covariance_tags: true`; `velocity_window_s` in the tags then says how
   long it actually is. Raise `velocity_window_chi2_max` or `velocity_gait_sigma_m`.

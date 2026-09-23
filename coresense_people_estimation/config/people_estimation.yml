@@ -40,7 +40,7 @@
     # (fewer than three samples, or all sharing a stamp).
     velocity_prior_variance: 1.0
 
-    # ── Velocity window ─────────────────────────────────────────────────────
+    # ── Tracking, spike rejection and velocity ──────────────────────────────
     # Longest and shortest window in seconds (~20 and ~6 samples at 10 Hz).
     # Raise the floor for smoother output, lower it to react faster to stops.
     velocity_window_max_s: 2.0
@@ -61,14 +61,57 @@
     # kinematics' v_eps_ms.
     velocity_epsilon: 0.05
     # A track unseen for longer than this, in seconds, restarts its history.
+    # Independent of spike_reset_timeout.
     velocity_max_gap_s: 0.5
     # Cap on stored samples per track; 60 covers velocity_window_max_s at
     # 30 Hz. Values below 3 are raised to 3.
     history_maxlen: 60
+    # Upper bound in m/s on the apparent speed between consecutive accepted
+    # readings of a track, robot rotation removed. Faster readings are rejected
+    # and the last accepted position republished.
+    max_person_speed: 2.5
+    # Consecutive rejections before the sensor is believed again. 0 disables
+    # the spike filter.
+    spike_max_holds: 5
+    # An accepted position older than this, in seconds, is no longer compared
+    # against; the next reading is taken as truth.
+    spike_reset_timeout: 1.0
 
     # Seconds after which the last cmd_vel counts as "robot stationary"; 0
     # disables the check. Only used to de-rotate the window by camera yaw.
     cmd_vel_timeout: 0.5
+
+    # ── Confirmation ────────────────────────────────────────────────────────
+    # Frames a ByteTrack id must be seen running before it is published (~0.3 s
+    # at 10 Hz). 0 or 1 disables the gate; while it is on, detections with
+    # track_id -1 are dropped.
+    confirm_frames: 3
+    # A track unseen for longer than this, in seconds, restarts its streak.
+    # Must clear one detection interval; 0.5 s works down to ~2.5 Hz.
+    confirm_reset_timeout: 0.5
+
+    # ── Plausibility ────────────────────────────────────────────────────────
+    # Rejects people printed on posters and screens by checking whether the
+    # strip across the top of the box reads anything behind them.
+    #
+    # Fraction of the bounding box height, from its top, that the strip covers.
+    background_strip_frac: 0.25
+    # Depth past the person, in metres, for a return to count as background.
+    # Matters in corridors, where the wall behind returns a depth.
+    background_step_m: 0.3
+    # Reject below this share of background pixels in the strip. Biased low:
+    # a kept poster costs a phantom obstacle, a dropped person a collision.
+    # 0 disables the gate.
+    background_min_far_frac: 0.03
+    # Strips with fewer valid pixels are never a rejection.
+    background_min_pixels: 40
+    # Consecutive failing frames before a track is suppressed. Raise if real
+    # people blink out when nothing readable is behind their head.
+    implausible_patience: 3
+    # A track unseen for longer than this, in seconds, restarts its streak.
+    # Keep longer than spike_reset_timeout, or a suppressed poster is re-admitted
+    # on a fixed cycle.
+    plausibility_reset_timeout: 2.0
 
     # ── Output ──────────────────────────────────────────────────────────────
     # Also publish velocity covariance, sample count and window length as

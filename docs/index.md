@@ -21,6 +21,9 @@ importance: each one depends on the ones above it holding up.
 
 | # | Stage | In one line |
 |---|---|---|
-| 1 | [Depth read-out](depth_readout.md) | Turn a box and keypoints into a range and an anchor pixel |
-| 2 | [Velocity adaptive window](velocity_adaptive_window.md) | Fit a velocity over a per-track window |
-| 3 | [Debug visualisation](debug_visualisation.md) | Markers for checking the geometry by eye |
+| 1 | [Confirmation](confirmation.md) | Drop detections that have not persisted |
+| 2 | [Depth read-out](depth_readout.md) | Turn a box and keypoints into a range and an anchor pixel |
+| 3 | [Plausibility](plausibility.md) | Reject people printed on posters and screens |
+| 4 | [Position spike filtering](position_spike_filtering.md) | Reject depth that read the background |
+| 5 | [Velocity adaptive window](velocity_adaptive_window.md) | Fit a velocity over a per-track window |
+| 6 | [Debug visualisation](debug_visualisation.md) | Markers for checking the geometry by eye |

@@ -32,3 +32,6 @@ Changes:
     - Propagate position and velocity covariances, published as tags alongside a reliability score
 - Rename the package to people_velocity_estimation
 - Move CI to GitHub Actions
+- Replace the adaptive-window velocity fit and speed-based spike filter with a per-track Kalman filter
+    - Gate depth spikes on the innovation chi-square instead of a flat max_person_speed
+    - Clamp the velocity change per frame to max_person_accel

@@ -10,7 +10,7 @@ not a measurement and must not be back-projected.
 The depth is attributed to the **hip midpoint** when both hips are visible and the box centre
 otherwise, since the hips track the centre of mass more stably than a box that shifts whenever a
 limb extends. That pixel is what gets back-projected. A detection whose depth cannot be measured
-is **dropped**, ahead of the spike filter, so a person whose position is being held is not
+is **dropped**, ahead of the spike gate, so a person whose position is being held is not
 resurrected by a frame with no usable depth.
 
 Do not go back to a single pixel at the box centre with a zero/NaN check, as `riskam_node` once

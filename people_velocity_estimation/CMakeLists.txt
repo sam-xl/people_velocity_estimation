@@ -12,6 +12,7 @@ find_package(Eigen3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(image_geometry REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core video)
 find_package(people_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -46,6 +47,8 @@ target_link_libraries(${PROJECT_NAME}_component
   ${geometry_msgs_TARGETS}
   image_geometry::image_geometry
   message_filters::message_filters
+  opencv_core
+  opencv_video
   ${people_msgs_TARGETS}
   rclcpp::rclcpp
   rclcpp_components::component
@@ -90,6 +93,7 @@ ament_export_dependencies(
   geometry_msgs
   image_geometry
   message_filters
+  OpenCV
   people_msgs
   rclcpp
   rclcpp_components

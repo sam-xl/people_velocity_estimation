@@ -412,18 +412,18 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   const Eigen::Matrix3d covariance = uncertainty_->positionCovariance(ray, depth, bbox_width, bbox_height, fx, fy);
 
   // ByteTrack reports every unassociated detection as -1; those have no identity
-  // to hold a history against, so they pass through as measured, with the velocity
-  // reported unknown rather than zero.
+  // to track, so they pass through as measured, with the velocity reported
+  // unknown rather than zero.
   const TrackUpdate update = detection.track_id >= 0 ?
                                  tracker_->update(detection.track_id, stamp, position, covariance, cumulative_yaw_) :
-                                 TrackUpdate::untracked(position, covariance, tracker_->priorFit());
+                                 TrackUpdate::untracked(position, covariance, tracker_->priorVelocityCovariance());
 
   // ── Assemble the Person ───────────────────────────────────────────────────
   people_msgs::msg::Person person;
   person.name = detection.track_id >= 0 ? "person_" + std::to_string(detection.track_id) :
                                           "person_untracked_" + std::to_string(untracked_in_message_++);
   person.position = tf2::toMsg(update.position);
-  person.velocity = tf2::toMsg(update.fit.velocity);
+  person.velocity = tf2::toMsg(update.velocity);
   // This frame's depth and keypoints, but the filtered covariance: only the
   // position is in doubt. See the README.
   person.reliability = uncertainty_->reliability(depth, update.covariance, countValidKeypoints(detection));
@@ -440,11 +440,11 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   {
     // The velocity numbers ride along the same way, in this message's frame.
     // See the README.
-    const Eigen::Matrix3d velocity_covariance = update.fit.variance.asDiagonal();
     person.tagnames.insert(person.tagnames.end(),
-                           { "position_covariance", "velocity_covariance", "n_history_samples", "velocity_window_s" });
-    person.tags.insert(person.tags.end(), { formatCovariance(update.covariance), formatCovariance(velocity_covariance),
-                                            std::to_string(update.fit.n_samples), std::to_string(update.window_s) });
+                           { "position_covariance", "velocity_covariance", "kalman_innovation_chi2" });
+    person.tags.insert(person.tags.end(),
+                       { formatCovariance(update.covariance), formatCovariance(update.velocity_covariance),
+                         std::to_string(update.innovation_chi2) });
   }
 
   return person;

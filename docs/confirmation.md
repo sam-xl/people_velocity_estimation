@@ -17,7 +17,7 @@ worth having also fails outright the moment the detector stutters under load, an
 so 0.5 s still confirms down to about 2.5 Hz. `confirm_frames: 0` restores the old behaviour,
 untracked detections included, which is the A/B switch for judging whether the gate helps.
 
-Two knock-on effects, both accepted: a new person's velocity history starts `confirm_frames`
+Two knock-on effects, both accepted: a new person's Kalman filter starts `confirm_frames`
 frames late, and a poster's `implausible_patience` frames begin only once it has confirmed.
 `riskam_msgs/PersonDetection` carries no confidence field, so the streak cannot be weighted by
 how sure the detector was.

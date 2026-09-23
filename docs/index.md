@@ -25,9 +25,8 @@ importance: each one depends on the ones above it holding up.
 | 1 | [Confirmation](confirmation.md) | Drop detections that have not persisted |
 | 2 | [Depth read-out](depth_readout.md) | Turn a box and keypoints into a range and an anchor pixel |
 | 3 | [Plausibility](plausibility.md) | Reject people printed on posters and screens |
-| 4 | [Position spike filtering](position_spike_filtering.md) | Reject depth that read the background |
-| 5 | [Velocity adaptive window](velocity_adaptive_window.md) | Fit a velocity over a per-track window |
-| 6 | [Map transform & motion compensation](map_transform.md) | Re-frame to `target_frame`, take the robot's own motion out |
-| 7 | [Coasting](coasting.md) | Carry forward a person the camera has lost |
-| 8 | [Uncertainty](uncertainty.md) | Covariances and `reliability` |
-| 9 | [Debug visualisation](debug_visualisation.md) | Markers for checking the geometry by eye |
+| 4 | [Kalman filter](kalman_filter.md) | Track position and velocity, gate out depth that read the background |
+| 5 | [Map transform & motion compensation](map_transform.md) | Re-frame to `target_frame`, take the robot's own motion out |
+| 6 | [Coasting](coasting.md) | Carry forward a person the camera has lost |
+| 7 | [Uncertainty](uncertainty.md) | Covariances and `reliability` |
+| 8 | [Debug visualisation](debug_visualisation.md) | Markers for checking the geometry by eye |

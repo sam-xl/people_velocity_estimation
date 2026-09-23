@@ -130,7 +130,7 @@ private:
   geometry_msgs::msg::Twist cmd_vel_;
   rclcpp::Time cmd_vel_stamp_;
   bool cmd_vel_received_{ false };
-  /// Camera yaw dead-reckoned from cmd_vel; only differences over a window are used.
+  /// Camera yaw dead-reckoned from cmd_vel; only differences between frames are used.
   double cumulative_yaw_{ 0.0 };
   /// Empty until the first detection message, which has no interval to integrate over.
   std::optional<double> previous_detection_stamp_;

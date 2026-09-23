@@ -8,8 +8,9 @@
 ## Overview
 
 Turns 2-D person detections into `people_msgs/People`: samples depth under each detection,
-back-projects it through the camera model, fits a velocity over a short per-track history, and
-re-frames the result into a world-fixed frame, compensated for the robot's own motion.
+back-projects it through the camera model, tracks position and velocity with a per-track
+Kalman filter, and re-frames the result into a world-fixed frame, compensated for the robot's own
+motion.
 
 Input is [`riskam_msgs/PersonDetections`](https://github.com/sam-xl/risk-awareness-module)
 from [RiskAM](https://github.com/sam-xl/risk-awareness-module)'s
@@ -172,7 +173,7 @@ close enough to trust a number from. Both scripts take `--help`.
 Also available as the composable component `people_velocity_estimation::PeopleEstimationNode`.
 
 Confirms each detection has persisted, reads its depth, rejects posters and depth spikes,
-back-projects it, fits a velocity over an adaptive per-track window, re-frames it into
+back-projects it, tracks it with a per-track Kalman filter, re-frames it into
 `target_frame` with the robot's motion compensated, coasts people the camera has lost and
 attaches a `reliability`; each stage is described in [`docs/`](./docs/index.md).
 
@@ -187,7 +188,7 @@ which documents every parameter inline.
   Positions and velocities in `target_frame` (`map` by default), compensated for the robot's
   own motion — or in the colour optical frame, uncompensated, when `target_frame` is empty.
   Per-person depth, hold and background diagnostics ride along in `tagnames`/`tags`, joined by
-  the window and covariance numbers under `publish_covariance_tags` and given in the colour
+  the covariance and innovation numbers under `publish_covariance_tags` and given in the colour
   optical frame. People the camera has lost are carried forward here too, tagged `coast_s`;
   see [Coasting](./docs/coasting.md).
 * `/people_estimation/debug_markers` ([visualization_msgs/MarkerArray](https://docs.ros2.org/latest/api/visualization_msgs/msg/MarkerArray.html))\
@@ -208,16 +209,15 @@ which documents every parameter inline.
 * `/camera/camera/color/camera_info` ([sensor_msgs/CameraInfo](https://docs.ros2.org/latest/api/sensor_msgs/msg/CameraInfo.html))\
   Intrinsics for the back-projection. Nothing is published until this arrives.
 * `/cmd_vel` ([geometry_msgs/Twist](https://docs.ros2.org/latest/api/geometry_msgs/msg/Twist.html))\
-  Dead-reckons the camera yaw that de-rotates a window before its consistency is judged, and
-  supplies `v_base` and `ω` for the motion compensation, where it *does* enter the published
-  velocity. It does not scale the spike-rejection bound, which is a flat `max_person_speed`.
+  Dead-reckons the camera yaw the Kalman filter turns its state by on each prediction, and
+  supplies `v_base` and `ω` for the motion compensation.
 
 ## Detailed Documentation
 
 Other than the brief introduction in this page, you can also check the detailed documentation
-[here](./docs/index.md): confirmation, depth read-out, plausibility and spike filtering, the
-adaptive-window velocity fit, the map transform and motion compensation, coasting, the
-uncertainty model and the debug visualisation.
+[here](./docs/index.md): confirmation, depth read-out, plausibility, the Kalman filter and its
+spike gate, the map transform and motion compensation, coasting, the uncertainty model and the
+debug visualisation.
 
 ## Bugs & Feature Requests
 

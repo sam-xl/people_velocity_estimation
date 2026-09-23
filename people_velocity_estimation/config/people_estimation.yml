@@ -28,8 +28,8 @@
     depth_max_m: 3.0
 
     # ── Uncertainty model ───────────────────────────────────────────────────
-    # Per-sample position sigma; feeds the velocity window test, the published
-    # covariance and reliability.
+    # Per-detection position sigma; seeds a track and sizes the Kalman filter's
+    # measurement noise.
     #
     # Anchor pixel sigma, as a fraction of the bounding box size.
     pixel_sigma_frac: 0.25
@@ -37,45 +37,33 @@
     # and (depth_noise_coeff x z^2). 0.0014 suits a RealSense D435 at defaults.
     depth_spread_gain: 1.0
     depth_noise_coeff: 0.0014
-    # Velocity variance in m^2/s^2 reported when the fit cannot produce one
-    # (fewer than three samples, or all sharing a stamp).
+    # Velocity variance in m^2/s^2 a new or re-seeded track starts from.
     velocity_prior_variance: 1.0
 
-    # ── Tracking, spike rejection and velocity ──────────────────────────────
-    # Longest and shortest window in seconds (~20 and ~6 samples at 10 Hz).
-    # Raise the floor for smoother output, lower it to react faster to stops.
-    velocity_window_max_s: 2.0
-    velocity_window_min_s: 0.6
-    # Reduced chi-square above which the window shortens; 1 means "exactly as
-    # noisy as expected". Lower for a more responsive, noisier estimate.
-    velocity_window_chi2_max: 3.0
-    # Fraction of the position sigma counted as frame-to-frame noise. Raise if
-    # the window collapses during straight-line walking.
-    velocity_window_sigma_scale: 0.25
-    # Expected gait sway amplitude in metres. Floors the window at ~1 cycle.
-    # Increase for smoother tracking, decrease for faster response to stops.
-    velocity_gait_sigma_m: 0.03
-    # Below this span of history in seconds the velocity is zero, with
-    # velocity_prior_variance. Mirrors riskam kinematics' min_span_s.
-    velocity_min_span_s: 0.3
+    # ── Kalman filter ───────────────────────────────────────────────────────
+    # Constant-velocity filter per track, in the colour optical frame.
+    #
+    # White-noise acceleration sigma in m/s^2. Raise to react faster to stops
+    # and turns, lower for a smoother estimate.
+    kalman_accel_sigma: 0.5
+    # Hard bound on the velocity change per frame, in m/s^2. 0 disables it.
+    max_person_accel: 4.0
+    # Measurement noise is (measurement_sigma_scale^2 x position covariance)
+    # + gait_sigma_m^2: the frame-to-frame share of the position sigma, plus
+    # gait sway in metres. Too low and real readings get gated and the
+    # velocity jitters; tune until kalman_innovation_chi2 averages about 3.
+    measurement_sigma_scale: 0.25
+    gait_sigma_m: 0.06
     # Speeds below this, in m/s, publish as exactly zero. Mirrors riskam
     # kinematics' v_eps_ms.
     velocity_epsilon: 0.05
-    # A track unseen for longer than this, in seconds, restarts its history.
-    # Independent of spike_reset_timeout.
-    velocity_max_gap_s: 0.5
-    # Cap on stored samples per track; 60 covers velocity_window_max_s at
-    # 30 Hz. Values below 3 are raised to 3.
-    history_maxlen: 60
-    # Upper bound in m/s on the apparent speed between consecutive accepted
-    # readings of a track, robot rotation removed. Faster readings are rejected
-    # and the last accepted position republished.
-    max_person_speed: 2.5
-    # Consecutive rejections before the sensor is believed again. 0 disables
-    # the spike filter.
+    # Readings further than this squared Mahalanobis distance from the
+    # prediction are gated out as depth spikes. 11.34 is chi-square 99 %, 3 DoF.
+    kalman_gate_chi2: 11.34
+    # Consecutive gated frames before the sensor is believed again and the
+    # track re-seeds. 0 disables the gate.
     spike_max_holds: 5
-    # An accepted position older than this, in seconds, is no longer compared
-    # against; the next reading is taken as truth.
+    # A track unseen for longer than this, in seconds, re-seeds.
     spike_reset_timeout: 1.0
 
     # Seconds after which the last cmd_vel counts as "robot stationary"; 0
@@ -131,8 +119,8 @@
     coast_process_sigma: 0.3
 
     # ── Output ──────────────────────────────────────────────────────────────
-    # Also publish the position and velocity covariances, sample count and
-    # window length as tagnames/tags pairs, in the colour optical frame. nav2
+    # Also publish the position and velocity covariances and the innovation
+    # chi-square as tagnames/tags pairs, in the colour optical frame. nav2
     # ignores them.
     publish_covariance_tags: false
     # `reliability` scales nav2's social Gaussian: the product of a valid-depth

@@ -15,8 +15,8 @@ out of `robot_base_frame`. Adding `v_base` makes a person standing still while t
 past read as stationary rather than closing; `ω × r` removes the sideways sweep a stationary
 person picks up whenever the robot turns, an error that grows linearly with range. The lever arm
 runs from the **base** origin, since the camera's own offset cancels between its linear and
-angular contributions. This consumes the body-fixed derivative, which is why the adaptive window
-is *chosen* de-rotated but *fitted* body-fixed. Two limits: `cmd_vel` is what the robot was
+angular contributions. This consumes the body-fixed derivative, which is why the Kalman filter
+adds the camera's own turn back onto its velocity on output. Two limits: `cmd_vel` is what the robot was
 *told* to do, so slip shows up as error, and `Twist` is unstamped, so commands are timestamped
 on arrival and anything older than `cmd_vel_timeout` counts as stationary.
 

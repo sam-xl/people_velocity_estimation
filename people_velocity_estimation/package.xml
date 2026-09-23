@@ -5,8 +5,8 @@
   <version>0.0.1</version>
   <description>
     Turns riskam_msgs/PersonDetections into people_msgs/People: samples depth
-    under each detection, back-projects it through the camera model, and fits a
-    per-track velocity over a short history. The result is re-framed into a
+    under each detection, back-projects it through the camera model, and tracks
+    position and velocity with a per-track Kalman filter. The result is re-framed into a
     world-fixed frame through TF and compensated for the robot's own motion, so
     what is published is world-fixed rather than robot-relative.
   </description>
@@ -19,6 +19,7 @@
   <depend>eigen</depend>
   <depend>geometry_msgs</depend>
   <depend>image_geometry</depend>
+  <depend>libopencv-dev</depend>
   <depend>message_filters</depend>
   <depend>people_msgs</depend>
   <depend>rclcpp</depend>

@@ -15,11 +15,10 @@
 #include "coresense_people_estimation/people_estimation_node.hpp"
 
 #include <Eigen/Core>
-#include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
@@ -27,15 +26,20 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
-#include "coresense_people_estimation/confirmation_filter.hpp"
 #include "coresense_people_estimation/debug_visualizer.hpp"
 #include "coresense_people_estimation/depth_reader.hpp"
 #include "coresense_people_estimation/keypoints.hpp"
 #include "coresense_people_estimation/parameters.hpp"
+#include "coresense_people_estimation/people_map_transform.hpp"
 #include "coresense_people_estimation/person_tracker.hpp"
 #include "coresense_people_estimation/plausibility_filter.hpp"
+#include "coresense_people_estimation/track_coaster.hpp"
+#include "coresense_people_estimation/uncertainty_model.hpp"
 #include "cv_bridge/cv_bridge.hpp"
+#include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "message_filters/synchronizer.hpp"
 #include "people_msgs/msg/people.hpp"
@@ -48,20 +52,15 @@
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "tf2_eigen/tf2_eigen.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace
 {
-std::string formatCovariance(const std::array<double, 9>& covariance)
+std::string formatCovariance(const Eigen::Matrix3d& covariance)
 {
+  static const Eigen::IOFormat kRowMajorSpaced(Eigen::StreamPrecision, Eigen::DontAlignCols, " ", " ");
   std::ostringstream out;
-  for (std::size_t i = 0; i < covariance.size(); ++i)
-  {
-    if (i != 0)
-    {
-      out << ' ';
-    }
-    out << covariance[i];
-  }
+  out << covariance.format(kRowMajorSpaced);
   return out.str();
 }
 }  // namespace
@@ -94,13 +93,9 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   depth_min_m_ = declare_parameter<double>("depth_min_m", 0.1);
   depth_max_m_ = declare_parameter<double>("depth_max_m", 3.0);
 
-  // ── Position noise ────────────────────────────────────────────────────────
-  // Feeds the velocity window's consistency test; see positionVariance().
-  pixel_sigma_frac_ = declare_parameter<double>("pixel_sigma_frac", 0.25);
-  depth_spread_gain_ = declare_parameter<double>("depth_spread_gain", 1.0);
-  depth_noise_coeff_ = declare_parameter<double>("depth_noise_coeff", 0.0014);
-
   cmd_vel_timeout_ = rclcpp::Duration::from_seconds(declare_parameter<double>("cmd_vel_timeout", 0.5));
+
+  coast_in_view_margin_m_ = declare_parameter<double>("coast_in_view_margin_m", 0.25);
 
   // ── Output ────────────────────────────────────────────────────────────────
   publish_covariance_tags_ = declare_parameter<bool>("publish_covariance_tags", false);
@@ -111,8 +106,13 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   confirmer_ = std::make_unique<ConfirmationFilter>(*this);
   depth_reader_ = std::make_unique<DepthReader>(*this, depth_min_m_, depth_max_m_);
   plausibility_ = std::make_unique<PlausibilityFilter>(*this, depth_min_m_);
+  uncertainty_ = std::make_unique<UncertaintyModel>(*this);
   tracker_ = std::make_unique<PersonTracker>(*this);
-  debug_ = std::make_unique<DebugVisualizer>(*this);
+  map_transform_ = std::make_unique<PeopleMapTransform>(*this);
+  // After the map transform, whose target_frame decides whether what this
+  // extrapolates in is world-fixed or not.
+  coaster_ = std::make_unique<TrackCoaster>(*this);
+  debug_ = std::make_unique<DebugVisualizer>(*this, !map_transform_->targetFrame().empty());
 
   // ── Wiring ────────────────────────────────────────────────────────────────
   // This message_filters release only exposes the rmw_qos_profile_t overloads
@@ -208,9 +208,7 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
   const double stamp = rclcpp::Time(detections->header.stamp).seconds();
 
   // ── Integrate the camera's own yaw ────────────────────────────────────────
-  // The only thing cmd_vel is used for here: a robot turn bends a stationary
-  // person's track, which would otherwise collapse every velocity window during
-  // every turn. See the README.
+  // Read once, reused by the map transform below, so both see the same command.
   const std::optional<geometry_msgs::msg::Twist> cmd_vel = latestCmdVel();
   const double omega_z = cmd_vel.has_value() ? cmd_vel->angular.z : 0.0;
   if (previous_detection_stamp_.has_value() && stamp > *previous_detection_stamp_)
@@ -223,6 +221,11 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
   people_msgs::msg::People people;
   people.header = detections->header;
 
+  // Parallel to people.people, so the coaster can key what was published on the
+  // ByteTrack id behind it. A detection the pipeline rejected adds to neither.
+  std::vector<std::int32_t> track_ids;
+  track_ids.reserve(detections->detections.size());
+
   // Per message, not per process: an ever-growing suffix would name a new debug
   // TF frame every frame, and tf2 never retires a frame id.
   untracked_in_message_ = 0;
@@ -233,6 +236,7 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
     if (person.has_value())
     {
       people.people.push_back(std::move(*person));
+      track_ids.push_back(detection.track_id);
     }
   }
 
@@ -240,10 +244,90 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
   tracker_->dropStale(stamp);
   plausibility_->dropStale(stamp);
 
+  // The untransformed input, kept only to be drawn next to the output, so the
+  // copy is paid for only when someone is looking.
+  people_msgs::msg::People sensor_frame_people;
+  if (debug_->showsRaw())
+  {
+    sensor_frame_people = people;
+  }
+
+  // Everything above is in the colour optical frame. A message that cannot be
+  // re-framed is dropped, not published in the wrong frame.
+  std::optional<PeopleMapTransform::RobotMotion> motion;
+  if (!map_transform_->transform(people, cmd_vel, &motion))
+  {
+    return;
+  }
+
+  // ── Coasting ──────────────────────────────────────────────────────────────
+  // All of it after the transform, so nothing it remembers or forgets is decided
+  // by a frame that was never published: a track that could not be re-framed
+  // keeps coasting from the last position that could.
+
+  // The anchor the next coasted frame extrapolates from, world-fixed because the
+  // transform has already run. Only the detected people are in `people` at this
+  // point, so it lines up with `track_ids` one for one.
+  coaster_->observe(people, track_ids, stamp);
+
+  // A failed lookup leaves the test empty and coasting runs ungated: not knowing
+  // where the camera points is no reason to drop anybody.
+  geometry_msgs::msg::TransformStamped target_to_camera;
+  TrackCoaster::InViewTest in_view;
+  if (map_transform_->lookupFromTarget(detections->header.frame_id, rclcpp::Time(detections->header.stamp),
+                                       target_to_camera))
+  {
+    in_view = [this, &target_to_camera](const geometry_msgs::msg::Point& position) {
+      return inCameraView(position, target_to_camera);
+    };
+  }
+
+  // Already in the published frame, so appended rather than transformed with the
+  // rest. After observe(), which must see this frame's measurements alone.
+  const std::vector<people_msgs::msg::Person> coasted = coaster_->coast(stamp, track_ids, in_view);
+  people.people.insert(people.people.end(), coasted.begin(), coasted.end());
+
+  coaster_->dropStale(stamp);
+
   people_pub_->publish(people);
 
-  // Draws exactly what was published, in the frame it was published in.
-  debug_->publish(people);
+  // Draws exactly what was published, plus the input it came from and the robot
+  // velocity that separates the two.
+  std::optional<DebugVisualizer::RobotArrow> robot;
+  if (motion.has_value())
+  {
+    robot = DebugVisualizer::RobotArrow{ motion->base_origin, motion->linear };
+  }
+  debug_->publish(people, sensor_frame_people, robot);
+}
+
+bool PeopleEstimationNode::inCameraView(const geometry_msgs::msg::Point& position,
+                                        const geometry_msgs::msg::TransformStamped& target_to_camera)
+{
+  geometry_msgs::msg::Point in_camera;
+  tf2::doTransform(position, in_camera, target_to_camera);
+
+  // Outside the band no detection could have been made here, so the detector's
+  // silence is not evidence of absence. Positive depth_min_m_ also rules out points
+  // behind the camera, which would otherwise project back into frame.
+  if (in_camera.z < depth_min_m_ || in_camera.z > depth_max_m_)
+  {
+    return false;
+  }
+
+  const std::lock_guard<std::mutex> lock(camera_info_mutex_);
+  // Both use P, so this inverts the projectPixelTo3dRay above exactly.
+  const cv::Point2d pixel = camera_model_.project3dToPixel(cv::Point3d(in_camera.x, in_camera.y, in_camera.z));
+  const cv::Size resolution = camera_model_.fullResolution();
+  // Inset, because a person straddling the border is detected unreliably: not finding
+  // them there is too weak a signal to drop a track on. In metres at the ghost's own
+  // range, since a body spans three times as many pixels at depth_min_m as at
+  // depth_max_m. Close in the inset can swallow the image and nothing is ever
+  // dropped, which is the safe direction.
+  const double margin_x = camera_model_.getDeltaU(coast_in_view_margin_m_, in_camera.z);
+  const double margin_y = camera_model_.getDeltaV(coast_in_view_margin_m_, in_camera.z);
+  const cv::Rect2d inset(margin_x, margin_y, resolution.width - 2.0 * margin_x, resolution.height - 2.0 * margin_y);
+  return inset.contains(pixel);
 }
 
 // ── Per-detection pipeline ──────────────────────────────────────────────────
@@ -279,29 +363,6 @@ std::optional<cv::Mat> PeopleEstimationNode::decodeDepth(const sensor_msgs::msg:
   return depth_m;
 }
 
-Eigen::Vector3d PeopleEstimationNode::positionVariance(const cv::Point3d& ray, const DepthEstimate& depth,
-                                                       double bbox_width, double bbox_height, double fx,
-                                                       double fy) const
-{
-  const double sigma_u = pixel_sigma_frac_ * bbox_width;
-  const double sigma_v = pixel_sigma_frac_ * bbox_height;
-  const double noise_floor = depth_noise_coeff_ * depth.depth_m * depth.depth_m;
-  // On the whole-bbox fallback the spread is the gap to the background, which
-  // says nothing about how well this person's distance is known.
-  const double sigma_z =
-      depth.from_bbox_fallback ? noise_floor : std::max(depth_spread_gain_ * depth.spread_m, noise_floor);
-
-  // Jacobian of P = ray * z with respect to (u, v, z): the depth term lands
-  // along the ray and the pixel terms across it. Diagonal only: the window
-  // test reads one axis at a time.
-  Eigen::Matrix3d jacobian;
-  jacobian << depth.depth_m / fx, 0.0, ray.x,  //
-      0.0, depth.depth_m / fy, ray.y,          //
-      0.0, 0.0, ray.z;
-  const Eigen::Vector3d pixel_and_depth_variance{ sigma_u * sigma_u, sigma_v * sigma_v, sigma_z * sigma_z };
-  return (jacobian * pixel_and_depth_variance.asDiagonal() * jacobian.transpose()).diagonal();
-}
-
 std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     const cv::Mat& depth_m, const riskam_msgs::msg::PersonDetection& detection, double stamp)
 {
@@ -335,6 +396,12 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   const Plausibility verdict = plausibility_->screen(depth_m, detection, depth.depth_m, stamp);
   if (!verdict.plausible)
   {
+    // Suppression has to reach the coaster too. A track already published for
+    // the frames it took the filter to make up its mind is sitting in there as
+    // somebody worth carrying forward, and coasting it would re-publish the
+    // poster for coast_max_s after the filter rejected it. Unlike a dropout,
+    // this is not somebody who might still be there. See the README.
+    coaster_->forget(detection.track_id);
     return std::nullopt;
   }
 
@@ -342,14 +409,14 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
 
   const double bbox_width = std::abs(static_cast<double>(detection.bbox[2] - detection.bbox[0]));
   const double bbox_height = std::abs(static_cast<double>(detection.bbox[3] - detection.bbox[1]));
-  const Eigen::Vector3d variance = positionVariance(ray, depth, bbox_width, bbox_height, fx, fy);
+  const Eigen::Matrix3d covariance = uncertainty_->positionCovariance(ray, depth, bbox_width, bbox_height, fx, fy);
 
   // ByteTrack reports every unassociated detection as -1; those have no identity
   // to hold a history against, so they pass through as measured, with the velocity
   // reported unknown rather than zero.
   const TrackUpdate update = detection.track_id >= 0 ?
-                                 tracker_->update(detection.track_id, stamp, position, variance, cumulative_yaw_) :
-                                 TrackUpdate::untracked(position, variance, tracker_->priorFit());
+                                 tracker_->update(detection.track_id, stamp, position, covariance, cumulative_yaw_) :
+                                 TrackUpdate::untracked(position, covariance, tracker_->priorFit());
 
   // ── Assemble the Person ───────────────────────────────────────────────────
   people_msgs::msg::Person person;
@@ -357,9 +424,9 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
                                           "person_untracked_" + std::to_string(untracked_in_message_++);
   person.position = tf2::toMsg(update.position);
   person.velocity = tf2::toMsg(update.fit.velocity);
-  // Every detection that got this far is equally believed: there is no model yet
-  // of how confident this measurement is.
-  person.reliability = 1.0;
+  // This frame's depth and keypoints, but the filtered covariance: only the
+  // position is in doubt. See the README.
+  person.reliability = uncertainty_->reliability(depth, update.covariance, countValidKeypoints(detection));
 
   // people_msgs/Person has no field for the per-detection diagnostics, so
   // tagnames/tags carry them. Always published: dropping or holding a person is
@@ -373,11 +440,11 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   {
     // The velocity numbers ride along the same way, in this message's frame.
     // See the README.
-    const std::array<double, 9> velocity_covariance{ { update.fit.variance[0], 0.0, 0.0, 0.0, update.fit.variance[1],
-                                                       0.0, 0.0, 0.0, update.fit.variance[2] } };
-    person.tagnames.insert(person.tagnames.end(), { "velocity_covariance", "n_history_samples", "velocity_window_s" });
-    person.tags.insert(person.tags.end(), { formatCovariance(velocity_covariance), std::to_string(update.fit.n_samples),
-                                            std::to_string(update.window_s) });
+    const Eigen::Matrix3d velocity_covariance = update.fit.variance.asDiagonal();
+    person.tagnames.insert(person.tagnames.end(),
+                           { "position_covariance", "velocity_covariance", "n_history_samples", "velocity_window_s" });
+    person.tags.insert(person.tags.end(), { formatCovariance(update.covariance), formatCovariance(velocity_covariance),
+                                            std::to_string(update.fit.n_samples), std::to_string(update.window_s) });
   }
 
   return person;

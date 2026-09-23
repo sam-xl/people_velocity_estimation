@@ -21,7 +21,10 @@ tracker did before the filter existed. An unassociated detection
 has no previous reading to compare against and goes out as measured — a hole that only reopens
 when `confirm_frames` is 0, since confirmation drops those first.
 
-A held position is a stale measurement republished, not an extrapolation: `position_hold_frames`
-counts the frames held. The held entry keeps the stamp of the accepted reading, so `Δt` grows and
-the same jump looks slower each frame — correct, since the longer nothing has been believed, the
-further the person could have gone.
+A held position is a stale measurement republished, not an extrapolation: its covariance is the
+one measured with it, and `position_hold_frames` counts the frames held. The held entry keeps the
+stamp of the accepted reading, so `Δt` grows and the same jump looks slower each frame — correct,
+since the longer nothing has been believed, the further the person could have gone. The
+covariance is deliberately not widened for staleness; with the bound set for outliers rather than
+for walking, the implied drift would swamp the trace and `reliability` would report the person as
+barely present.

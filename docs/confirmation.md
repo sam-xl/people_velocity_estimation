@@ -1,8 +1,8 @@
 # Confirmation
 
 The pose model occasionally draws a box in a random spot for exactly one frame. Nothing
-downstream can tell that box from a real one, so anything consuming `/people` ends up reacting to
-an obstacle that was already gone. A detection is therefore withheld until its ByteTrack id has
+downstream can tell that box from a real one, so nav2's social layer ends up planning around an
+obstacle that was already gone. A detection is therefore withheld until its ByteTrack id has
 been seen `confirm_frames` frames running. This sits **ahead of the depth read**, so an
 unconfirmed detection costs nothing but a map lookup, and "seen N frames" means purely that the
 detector kept drawing the box — whether that box also had a readable depth is a different

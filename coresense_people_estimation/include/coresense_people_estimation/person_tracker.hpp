@@ -42,7 +42,7 @@ struct VelocityFit
 struct TrackUpdate
 {
   Eigen::Vector3d position;
-  Eigen::Vector3d variance;
+  Eigen::Matrix3d covariance;
   /// Zero when the values above are this frame's measurement, else how many
   /// consecutive frames they have been held for.
   std::size_t hold_frames;
@@ -50,11 +50,12 @@ struct TrackUpdate
   double window_s;  ///< time span of the samples the fit came from
 
   /// For a detection carrying no track id: published as measured, never held,
-  /// with no history behind the velocity. Named because `position` and
-  /// `variance` are the same type and transposing them would still compile.
-  static TrackUpdate untracked(const Eigen::Vector3d& position, const Eigen::Vector3d& variance, const VelocityFit& fit)
+  /// with no history behind the velocity. Named so the call site does not have to
+  /// be read as "0 means never held, 0.0 means no window".
+  static TrackUpdate untracked(const Eigen::Vector3d& position, const Eigen::Matrix3d& covariance,
+                               const VelocityFit& fit)
   {
-    return TrackUpdate{ position, variance, 0, fit, 0.0 };
+    return TrackUpdate{ position, covariance, 0, fit, 0.0 };
   }
 };
 
@@ -74,10 +75,8 @@ public:
 
   /// Fold this frame's reading into `track_id` and report what to publish for it:
   /// the measurement or a held one, and the velocity that goes with it.
-  /// `variance` is the per-axis position variance the window's consistency test
-  /// judges residuals against; see the README.
   TrackUpdate update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
-                     const Eigen::Vector3d& variance, double cumulative_yaw);
+                     const Eigen::Matrix3d& covariance, double cumulative_yaw);
 
   /// Forget tracks too old to contribute, so churning ids cannot grow the map.
   void dropStale(double now);
@@ -91,10 +90,10 @@ private:
   /// One accepted observation of a track; a held frame is never a sample.
   struct Sample
   {
-    double stamp;              ///< seconds, from the detection message header
-    Eigen::Vector3d position;  ///< colour optical frame, metres
-    Eigen::Vector3d variance;  ///< per-axis position variance, m^2
-    double cumulative_yaw;     ///< camera yaw integrated from cmd_vel, radians
+    double stamp;                ///< seconds, from the detection message header
+    Eigen::Vector3d position;    ///< colour optical frame, metres
+    Eigen::Matrix3d covariance;  ///< position covariance, m^2
+    double cumulative_yaw;       ///< camera yaw integrated from cmd_vel, radians
   };
 
   /// Everything remembered about one tracked person between frames.
@@ -104,7 +103,7 @@ private:
     /// successors are rejected.
     double stamp{ 0.0 };                 ///< seconds, from the detection message header
     Eigen::Vector3d position{};          ///< colour optical frame, metres
-    Eigen::Vector3d variance{};          ///< per-axis, as handed to update()
+    Eigen::Matrix3d covariance{};        ///< as published in the tags
     double cumulative_yaw{ 0.0 };        ///< camera yaw when `position` was accepted
     std::size_t consecutive_holds{ 0 };  ///< rejections since, bounded by `spike_max_holds`
 
@@ -121,20 +120,19 @@ private:
   struct FilteredPosition
   {
     Eigen::Vector3d position;
-    Eigen::Vector3d variance;
+    Eigen::Matrix3d covariance;
     std::size_t hold_frames;
 
-    // Named rather than brace-initialised at the call sites: the two arrays are
-    // the same type, so a transposition would compile and silently swap the
-    // covariance onto the position.
-    static FilteredPosition measured(const Eigen::Vector3d& position, const Eigen::Vector3d& variance)
+    // Named so each call site says which of the two it means, rather than leaving
+    // a bare 0 to be the only thing separating a measurement from a held frame.
+    static FilteredPosition measured(const Eigen::Vector3d& position, const Eigen::Matrix3d& covariance)
     {
-      return FilteredPosition{ position, variance, 0 };
+      return FilteredPosition{ position, covariance, 0 };
     }
-    static FilteredPosition held(const Eigen::Vector3d& position, const Eigen::Vector3d& variance,
+    static FilteredPosition held(const Eigen::Vector3d& position, const Eigen::Matrix3d& covariance,
                                  std::size_t hold_frames)
     {
-      return FilteredPosition{ position, variance, hold_frames };
+      return FilteredPosition{ position, covariance, hold_frames };
     }
   };
 
@@ -148,7 +146,7 @@ private:
   /// Accept this frame's reading for a track, or reject it as a spike and
   /// republish the last accepted one.
   FilteredPosition filterPosition(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
-                                  const Eigen::Vector3d& variance, double cumulative_yaw);
+                                  const Eigen::Matrix3d& covariance, double cumulative_yaw);
 
   /// Velocity over an adaptively chosen window: as much history as stays
   /// consistent with one constant velocity, and no more.

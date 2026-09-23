@@ -14,6 +14,7 @@
 
 #include "coresense_people_estimation/debug_visualizer.hpp"
 
+#include <Eigen/Core>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -21,6 +22,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -33,6 +35,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
 #include "tf2/LinearMath/Quaternion.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/transform_broadcaster.hpp"
 #include "visualization_msgs/msg/marker.hpp"
@@ -41,19 +44,27 @@
 namespace
 {
 /// Marker namespaces. Each is independently toggleable in RViz, so keeping
-/// positions, velocities and labels apart is worth the extra ids.
+/// positions, velocities, labels and raw input apart is worth the extra ids.
 constexpr char kNsPeople[] = "people";
 constexpr char kNsVelocity[] = "velocity";
 constexpr char kNsLabel[] = "label";
+constexpr char kNsRawPeople[] = "raw_people";
+constexpr char kNsRawVelocity[] = "raw_velocity";
+constexpr char kNsRobot[] = "robot_velocity";
 
 struct Rgba
 {
   float r, g, b, a;
 };
 
+/// Transformed output is green/cyan, raw sensor-frame input is orange, and the
+/// robot's own velocity — the term that turns one into the other — is magenta.
 constexpr Rgba kPersonColor{ 0.20F, 0.85F, 0.35F, 0.85F };
 constexpr Rgba kVelocityColor{ 0.10F, 0.95F, 0.85F, 0.95F };
 constexpr Rgba kLabelColor{ 1.00F, 1.00F, 1.00F, 0.90F };
+constexpr Rgba kRawPersonColor{ 1.00F, 0.55F, 0.10F, 0.45F };
+constexpr Rgba kRawVelocityColor{ 1.00F, 0.35F, 0.10F, 0.70F };
+constexpr Rgba kRobotColor{ 0.90F, 0.20F, 0.90F, 0.90F };
 
 /// Shortest arrow worth drawing, in metres. RViz logs a warning for every
 /// zero-length arrow it is handed, once per marker per frame.
@@ -94,20 +105,16 @@ visualization_msgs::msg::Marker makeMarker(const std_msgs::msg::Header& header, 
 /// Lays an ARROW marker out as start point plus displacement, sizing the shaft
 /// and head off `radius` so arrows stay legible whatever the person scale is.
 /// Returns false when the displacement is too short to draw.
-bool setArrow(visualization_msgs::msg::Marker& marker, const geometry_msgs::msg::Point& start, double dx, double dy,
-              double dz, double radius)
+bool setArrow(visualization_msgs::msg::Marker& marker, const Eigen::Vector3d& start,
+              const Eigen::Vector3d& displacement, double radius)
 {
-  if (std::hypot(dx, dy, dz) < kMinArrowLength)
+  if (displacement.norm() < kMinArrowLength)
   {
     return false;
   }
 
-  geometry_msgs::msg::Point tip;
-  tip.x = start.x + dx;
-  tip.y = start.y + dy;
-  tip.z = start.z + dz;
-
-  marker.points = { start, tip };
+  const Eigen::Vector3d tip = start + displacement;
+  marker.points = { tf2::toMsg(start), tf2::toMsg(tip) };
   marker.scale.x = kShaftDiameterFrac * radius;
   marker.scale.y = kHeadDiameterFrac * radius;
   marker.scale.z = kHeadLengthFrac * radius;
@@ -136,13 +143,15 @@ std::string sanitizeFrameId(const std::string& name)
 namespace coresense_people_estimation
 {
 
-DebugVisualizer::DebugVisualizer(rclcpp::Node& node)
+DebugVisualizer::DebugVisualizer(rclcpp::Node& node, bool gravity_aligned)
   : node_(node)
+  , gravity_aligned_(gravity_aligned)
 {
   // ── Parameters ────────────────────────────────────────────────────────────
   debug_ = node_.declare_parameter<bool>("debug", false);
   const std::string debug_topic = node_.declare_parameter<std::string>("debug_topic", "~/debug_markers");
   debug_person_frames_ = node_.declare_parameter<bool>("debug_person_frames", true);
+  debug_show_raw_ = node_.declare_parameter<bool>("debug_show_raw", true);
   debug_velocity_scale_ = node_.declare_parameter<double>("debug_velocity_scale", 1.0);
   debug_person_radius_ = node_.declare_parameter<double>("debug_person_radius", 0.2);
   debug_marker_lifetime_ =
@@ -161,11 +170,13 @@ DebugVisualizer::DebugVisualizer(rclcpp::Node& node)
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
   }
 
-  RCLCPP_INFO(node_.get_logger(), "debug visualisation on | markers=%s | person TF frames=%s",
-              debug_marker_pub_->get_topic_name(), debug_person_frames_ ? "yes" : "no");
+  RCLCPP_INFO(node_.get_logger(), "debug visualisation on | markers=%s | person TF frames=%s | raw input shown=%s",
+              debug_marker_pub_->get_topic_name(), debug_person_frames_ ? "yes" : "no", debug_show_raw_ ? "yes" : "no");
 }
 
-void DebugVisualizer::publish(const people_msgs::msg::People& people)
+void DebugVisualizer::publish(const people_msgs::msg::People& people,
+                              const people_msgs::msg::People& sensor_frame_people,
+                              const std::optional<RobotArrow>& robot)
 {
   if (!debug_)
   {
@@ -173,14 +184,15 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
   }
 
   visualization_msgs::msg::MarkerArray array;
-  // A sphere, an arrow and a label per person.
-  array.markers.reserve(3 * people.people.size());
+  // 3 markers per transformed person, 2 per raw one, plus the robot arrow.
+  array.markers.reserve(5 * people.people.size() + 1);
 
   const int type_sphere = visualization_msgs::msg::Marker::SPHERE;
   const int type_arrow = visualization_msgs::msg::Marker::ARROW;
   const int type_text = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
 
   std::size_t velocity_count = 0;
+  std::size_t raw_velocity_count = 0;
 
   for (std::size_t i = 0; i < people.people.size(); ++i)
   {
@@ -194,11 +206,12 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
     array.markers.push_back(std::move(sphere));
 
     // Velocity, as a look-ahead arrow.
-    const double speed = std::hypot(person.velocity.x, person.velocity.y, person.velocity.z);
+    Eigen::Vector3d position;
+    tf2::fromMsg(person.position, position);
+    Eigen::Vector3d velocity;
+    tf2::fromMsg(person.velocity, velocity);
     auto arrow = makeMarker(people.header, kNsVelocity, id, type_arrow, kVelocityColor, debug_marker_lifetime_);
-    if (setArrow(arrow, person.position, person.velocity.x * debug_velocity_scale_,
-                 person.velocity.y * debug_velocity_scale_, person.velocity.z * debug_velocity_scale_,
-                 debug_person_radius_))
+    if (setArrow(arrow, position, debug_velocity_scale_ * velocity, debug_person_radius_))
     {
       // Arrow ids must stay dense from 0 for the stale-marker sweep to work,
       // so a skipped (near-stationary) person does not burn an id.
@@ -211,13 +224,61 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
     label.pose.position = person.position;
     label.pose.position.z += kLabelHeightAboveCentreFrac * debug_person_radius_;
     label.scale.z = kLabelTextHeightFrac * debug_person_radius_;
-    label.text = personLabel(person, i, speed);
+    label.text = personLabel(person, i, velocity.norm());
     array.markers.push_back(std::move(label));
+  }
+
+  // The raw input, drawn in the sensor frame it arrived in. Seeing both at once
+  // is the whole point: if the two clouds disagree about where a person *is*,
+  // the TF chain is wrong; if they only disagree about velocity, the motion
+  // compensation is.
+  if (debug_show_raw_)
+  {
+    for (std::size_t i = 0; i < sensor_frame_people.people.size(); ++i)
+    {
+      const auto& person = sensor_frame_people.people[i];
+      const int id = static_cast<int>(i);
+
+      auto sphere = makeMarker(sensor_frame_people.header, kNsRawPeople, id, type_sphere, kRawPersonColor,
+                               debug_marker_lifetime_);
+      sphere.pose.position = person.position;
+      sphere.scale.x = sphere.scale.y = sphere.scale.z = 2.0 * debug_person_radius_;
+      array.markers.push_back(std::move(sphere));
+
+      Eigen::Vector3d position;
+      tf2::fromMsg(person.position, position);
+      Eigen::Vector3d velocity;
+      tf2::fromMsg(person.velocity, velocity);
+      auto arrow = makeMarker(sensor_frame_people.header, kNsRawVelocity, id, type_arrow, kRawVelocityColor,
+                              debug_marker_lifetime_);
+      if (setArrow(arrow, position, debug_velocity_scale_ * velocity, debug_person_radius_))
+      {
+        arrow.id = static_cast<int>(raw_velocity_count++);
+        array.markers.push_back(std::move(arrow));
+      }
+    }
+  }
+
+  // The robot's own velocity, drawn from the base origin. This is the vector
+  // that was added to every person; an arrow pointing the wrong way here
+  // explains every wrong person velocity at once.
+  std::size_t robot_count = 0;
+  if (robot.has_value())
+  {
+    auto arrow = makeMarker(people.header, kNsRobot, 0, type_arrow, kRobotColor, debug_marker_lifetime_);
+    if (setArrow(arrow, robot->origin, debug_velocity_scale_ * robot->linear, debug_person_radius_))
+    {
+      array.markers.push_back(std::move(arrow));
+      robot_count = 1;
+    }
   }
 
   reapStaleMarkers(array, kNsPeople, people.people.size());
   reapStaleMarkers(array, kNsVelocity, velocity_count);
   reapStaleMarkers(array, kNsLabel, people.people.size());
+  reapStaleMarkers(array, kNsRawPeople, debug_show_raw_ ? sensor_frame_people.people.size() : 0);
+  reapStaleMarkers(array, kNsRawVelocity, raw_velocity_count);
+  reapStaleMarkers(array, kNsRobot, robot_count);
 
   debug_marker_pub_->publish(array);
 
@@ -274,13 +335,20 @@ void DebugVisualizer::publishPersonFrames(const people_msgs::msg::People& people
 
     // Yaw the frame along the direction of travel so heading is readable from
     // the axes alone; a person who is not moving keeps the parent frame's
-    // orientation rather than snapping to an arbitrary one. The frame is
-    // optical — x right, y down, z forward — so heading lives in the x-z plane
-    // and its axis is -y, not z.
-    const double ground_speed = std::hypot(person.velocity.x, person.velocity.z);
-    const double heading = ground_speed > kMinArrowLength ? std::atan2(person.velocity.x, person.velocity.z) : 0.0;
+    // orientation rather than snapping to an arbitrary one. Which plane the
+    // heading lives in follows the frame the people arrived in.
+    const double forward = gravity_aligned_ ? person.velocity.x : person.velocity.z;
+    const double sideways = gravity_aligned_ ? person.velocity.y : person.velocity.x;
+    const double heading = std::hypot(forward, sideways) > kMinArrowLength ? std::atan2(sideways, forward) : 0.0;
     tf2::Quaternion q;
-    q.setRPY(0.0, -heading, 0.0);
+    if (gravity_aligned_)
+    {
+      q.setRPY(0.0, 0.0, heading);
+    }
+    else
+    {
+      q.setRPY(0.0, -heading, 0.0);
+    }
     tf.transform.rotation = tf2::toMsg(q);
 
     transforms.push_back(std::move(tf));

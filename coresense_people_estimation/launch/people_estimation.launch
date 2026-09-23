@@ -2,8 +2,8 @@
 <!--
   Bring up the people_estimation node.
 
-  Turns riskam_msgs/PersonDetections into people_msgs/People, in the colour
-  optical frame. The node name must stay "people_estimation":
+  Turns riskam_msgs/PersonDetections into people_msgs/People, re-framed into the
+  node's target_frame. The node name must stay "people_estimation":
   config/people_estimation.yml keys its parameters on the fully-qualified node
   name, and renaming either side silently stops them from being applied.
 -->

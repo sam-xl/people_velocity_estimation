@@ -6,8 +6,9 @@
   <description>
     Turns riskam_msgs/PersonDetections into people_msgs/People: samples depth
     under each detection, back-projects it through the camera model, and fits a
-    per-track velocity over a short, adaptively chosen history. Positions and
-    velocities are published in the colour optical frame, relative to the robot.
+    per-track velocity over a short history. The result is re-framed into a
+    world-fixed frame through TF and compensated for the robot's own motion, so
+    what is published is world-fixed rather than robot-relative.
   </description>
   <maintainer email="G.Sotirchos@tudelft.nl">George Sotirchos</maintainer>
   <license>Apache-2.0</license>

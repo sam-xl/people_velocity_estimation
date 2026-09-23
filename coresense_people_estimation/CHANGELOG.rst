@@ -25,3 +25,8 @@ Changes:
     - Withhold a detection until its ByteTrack id has been seen confirm_frames frames running, and drop untracked detections outright
     - Reject people printed on posters, banners and screens by testing whether anything reads behind them
     - Discard a depth reading that implies more than max_person_speed and republish the last accepted position
+- Publish in the map frame for the nav2 social costmap layer
+    - Transform positions into target_frame and compensate velocities for the robot's own motion
+    - Coast a track the camera has lost for coast_max_s, with reliability fading to zero
+    - Drop a coasted track the moment its extrapolated position falls back inside the camera image, so an in-frame occlusion is never coasted through
+    - Propagate position and velocity covariances, published as tags alongside a reliability score

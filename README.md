@@ -2,10 +2,9 @@
 
 ## Overview
 
-Turns 2-D person detections into `people_msgs/People`: withholds a detection until it has
-persisted, samples depth under each detection, rejects people printed on posters and screens,
-back-projects the rest through the camera model, and fits a velocity over a short per-track
-history.
+Turns 2-D person detections into `people_msgs/People`: samples depth under each detection,
+back-projects it through the camera model, fits a velocity over a short per-track history, and
+re-frames the result into a world-fixed frame, compensated for the robot's own motion.
 
 Input is [`riskam_msgs/PersonDetections`](https://github.com/sam-xl/risk-awareness-module)
 from [RiskAM](https://github.com/sam-xl/risk-awareness-module)'s
@@ -13,10 +12,9 @@ from [RiskAM](https://github.com/sam-xl/risk-awareness-module)'s
 happens here, so the depth policy can change without touching RiskAM or the interface between
 them.
 
-Output is in the **colour camera's optical frame** and **robot-relative**; re-framing into a
-world-fixed frame and removing the robot's own motion is not done here yet, so `/people` is not
-yet what nav2's social costmap layer consumes. The pipeline is described in
-[`docs/`](./docs/index.md).
+Everything metric is measured in the **colour camera's optical frame** and re-framed into
+`target_frame` (`map` by default) on the way out, so `/people` is world-fixed and ready for
+nav2's social costmap layer. The pipeline is described in [`docs/`](./docs/index.md).
 
 **Authors: [George Sotirchos](https://github.com/gsotirchos-samxl) ([SAM XL](https://github.com/sam-xl))**
 
@@ -70,24 +68,79 @@ ros2 launch coresense_people_estimation people_estimation.launch
 
 Override the parameter file with `config:=/path/to/your.yml`. Add `debug:=true` to draw the
 geometry as a **MarkerArray** on `/people_estimation/debug_markers`; view it in RViz with the
-fixed frame set to `camera_color_optical_frame`. See
+fixed frame set to `target_frame` (`map`). See
 [Debug visualisation](./docs/debug_visualisation.md) for what is drawn and how to read it.
 
-No TF tree is needed: nothing here is transformed. Detections, a registered depth image and the
-colour `camera_info` are the whole input, and nothing is published until `camera_info` arrives.
+TF must supply `source_frame -> target_frame` and `robot_base_frame -> target_frame`, so this
+needs a localisation stack — or `scripts/dummy_tf.py` on the bench, see
+[Testing without a robot](#testing-without-a-robot). Without it nothing is published, only a
+throttled "Could not transform" warning. Nothing is published until `camera_info` arrives either.
 
-### Testing from a bag
+### Testing without a robot
 
-A replay carrying the detections and the aligned depth image is the whole rig — there is no TF
-tree to fake:
+`scripts/dummy_tf.py` fills in whichever part of the TF chain is missing, so the node can be
+exercised with no localisation stack and no robot:
 
 ```bash
+ros2 run coresense_people_estimation dummy_tf.py               # map -> odom -> base_link -> camera
 ros2 launch coresense_people_estimation people_estimation.launch debug:=true
-ros2 bag play <bag>
-ros2 topic echo /people
 ```
 
-If the replay carries the colour images but not their `camera_info`, nothing is ever published.
+#### Which invocation
+
+The choice is driven by how much of the tree something else already owns. Publishing a
+transform that is already owned gives its child frame two parents, which tf2 resolves by
+silently keeping whichever arrived last — so err towards publishing less.
+
+| Situation | Command |
+|---|---|
+| No robot and no replay — pure bench | `dummy_tf.py` |
+| Replay carrying only the camera | `dummy_tf.py` |
+| Real robot, or a replay with a full tree **including localisation** | `dummy_tf.py --camera-only` |
+| Real robot or replay with odometry but **no localisation** | `dummy_tf.py --camera-only --static-odom` |
+
+`--camera-only` publishes the camera mount alone — one transform, unless `--static-odom` below adds
+the second — for when the robot's own TF comes from a bag replay or a live robot. Publishing the rest on top of one is actively harmful — `base_link`,
+`chassis_link` and `mid_mount` all end up with two parents, and wall-clock stamps against an
+older recording fall outside tf2's cache window. The script's docstring spells this out.
+
+`--static-base` pins the base at the origin instead. That makes hand-computed checks easy, but
+it zeroes **both** velocity-compensation terms, so it is not a test of the velocity path.
+
+`--static-odom` adds that identity `map -> odom` back under `--camera-only`, restoring the target
+frame without touching the odometry or the structure below it. Reach for it rather than
+`--static-base`, which pins `odom -> base_link` and would make this a second publisher of an
+edge the robot already broadcasts — the pose then flips between the two every few
+milliseconds.
+
+`map -> odom` is the one transform here that is never integrated from `/cmd_vel`, in either
+mode. It is the localisation *correction*, and the robot's own odometry already carries the
+motion in `odom -> base_link` — driving it from `/cmd_vel` too would move the base twice as
+far and turn it twice as fast in `map`, and double `v_base` in the velocity compensation with
+it.
+
+Check the tree with `ros2 run tf2_ros tf2_echo map camera_color_optical_frame` — the rotation
+matrix should read `[[0,0,1],[-1,0,0],[0,-1,0]]`, optical z (forward) onto base x (forward).
+
+#### Exercising the velocity compensation
+
+```bash
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist '{linear: {x: 0.5}, angular: {z: 0.3}}'
+```
+
+A person with zero velocity *relative to the camera* is not standing still: with the base
+driving they are carried along with it, so a correct cyan arrow in `map` is non-zero and
+roughly parallel to the magenta robot arrow. Zero map velocity there means the compensation
+is not being applied.
+
+The sharpest check is a person genuinely motionless in the world: project a fixed map-frame
+point into the optical frame using live TF and difference it between frames. Everything the
+node receives then changes every frame while the correct answer is constant. At 0.5 m/s and
+0.3 rad/s with the person 4.5 m out that gave 0.0000 m max position error and 0.0050 m/s max
+residual speed — differencing noise, not bias. A residual that grows with *range* means
+`ω × r` is wrong; one proportional to *speed* points at `v_base` or `robot_base_frame`.
+
+A replay that carries the colour images but not their `camera_info` publishes nothing.
 `bag_camera_shim.py` publishes a stand-in colour `camera_info`, paced by the depth stream:
 
 ```bash
@@ -96,7 +149,7 @@ ros2 run coresense_people_estimation bag_camera_shim.py
 
 Pass `--color-intrinsics fx fy cx cy` when the real calibration is known — the defaults are
 nominal D435i intrinsics at 640x480, which are close enough to see the pipeline work and not
-close enough to trust a number from. Takes `--help`.
+close enough to trust a number from. Both scripts take `--help`.
 
 > The scripts in `scripts/` need their executable bit (`chmod +x`) — `--symlink-install`
 > links straight to the source file, and `ros2 run` will not find them otherwise.
@@ -114,8 +167,9 @@ close enough to trust a number from. Takes `--help`.
 Also available as the composable component `coresense_people_estimation::PeopleEstimationNode`.
 
 Confirms each detection has persisted, reads its depth, rejects posters and depth spikes,
-back-projects it and fits a velocity over an adaptive per-track window; each stage is described
-in [`docs/`](./docs/index.md).
+back-projects it, fits a velocity over an adaptive per-track window, re-frames it into
+`target_frame` with the robot's motion compensated, coasts people the camera has lost and
+attaches a `reliability`; each stage is described in [`docs/`](./docs/index.md).
 
 #### Parameters
 
@@ -125,9 +179,12 @@ which documents every parameter inline.
 #### Published Topics
 
 * `/people` ([people_msgs/People](https://github.com/wg-perception/people))\
-  Positions and velocities in the **colour optical frame**, relative to the robot.
+  Positions and velocities in `target_frame` (`map` by default), compensated for the robot's
+  own motion — or in the colour optical frame, uncompensated, when `target_frame` is empty.
   Per-person depth, hold and background diagnostics ride along in `tagnames`/`tags`, joined by
-  the window and velocity-covariance numbers under `publish_covariance_tags`.
+  the window and covariance numbers under `publish_covariance_tags` and given in the colour
+  optical frame. People the camera has lost are carried forward here too, tagged `coast_s`;
+  see [Coasting](./docs/coasting.md).
 * `/people_estimation/debug_markers` ([visualization_msgs/MarkerArray](https://docs.ros2.org/latest/api/visualization_msgs/msg/MarkerArray.html))\
   Debug geometry, only under `debug`. See [Debug visualisation](./docs/debug_visualisation.md).
 * `/tf` ([tf2_msgs/TFMessage](https://docs.ros2.org/latest/api/tf2_msgs/msg/TFMessage.html))\
@@ -146,14 +203,16 @@ which documents every parameter inline.
 * `/camera/camera/color/camera_info` ([sensor_msgs/CameraInfo](https://docs.ros2.org/latest/api/sensor_msgs/msg/CameraInfo.html))\
   Intrinsics for the back-projection. Nothing is published until this arrives.
 * `/cmd_vel` ([geometry_msgs/Twist](https://docs.ros2.org/latest/api/geometry_msgs/msg/Twist.html))\
-  Dead-reckons the camera yaw that de-rotates a window before its consistency is judged. It does
-  not otherwise enter the published velocity.
+  Dead-reckons the camera yaw that de-rotates a window before its consistency is judged, and
+  supplies `v_base` and `ω` for the motion compensation, where it *does* enter the published
+  velocity. It does not scale the spike-rejection bound, which is a flat `max_person_speed`.
 
 ## Detailed Documentation
 
 Other than the brief introduction in this page, you can also check the detailed documentation
 [here](./docs/index.md): confirmation, depth read-out, plausibility and spike filtering, the
-adaptive-window velocity fit and the debug visualisation.
+adaptive-window velocity fit, the map transform and motion compensation, coasting, the
+uncertainty model and the debug visualisation.
 
 ## Bugs & Feature Requests
 

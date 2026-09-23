@@ -14,19 +14,26 @@
 
 #include "coresense_people_estimation/people_estimation_node.hpp"
 
+#include <Eigen/Core>
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <opencv2/core.hpp>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 
 #include "coresense_people_estimation/debug_visualizer.hpp"
 #include "coresense_people_estimation/depth_reader.hpp"
 #include "coresense_people_estimation/keypoints.hpp"
+#include "coresense_people_estimation/person_tracker.hpp"
 #include "cv_bridge/cv_bridge.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "message_filters/synchronizer.hpp"
 #include "people_msgs/msg/people.hpp"
 #include "people_msgs/msg/person.hpp"
@@ -37,11 +44,26 @@
 #include "sensor_msgs/image_encodings.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "tf2_eigen/tf2_eigen.hpp"
 
 namespace
 {
 /// Detections arrive at camera rate, so missing-input warnings must be throttled.
 constexpr int kWarnThrottleMs = 5000;
+
+std::string formatCovariance(const std::array<double, 9>& covariance)
+{
+  std::ostringstream out;
+  for (std::size_t i = 0; i < covariance.size(); ++i)
+  {
+    if (i != 0)
+    {
+      out << ' ';
+    }
+    out << covariance[i];
+  }
+  return out.str();
+}
 }  // namespace
 
 namespace coresense_people_estimation
@@ -49,6 +71,7 @@ namespace coresense_people_estimation
 
 PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   : rclcpp::Node("people_estimation", options)
+  , cmd_vel_stamp_(0, 0, RCL_ROS_TIME)
 {
   // ── Topics ────────────────────────────────────────────────────────────────
   const std::string detections_topic = declare_parameter<std::string>("detections_topic", "/riskam/person_detections");
@@ -58,6 +81,7 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
       declare_parameter<std::string>("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw");
   const std::string camera_info_topic =
       declare_parameter<std::string>("camera_info_topic", "/camera/camera/color/camera_info");
+  const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "/cmd_vel");
   const std::string people_topic = declare_parameter<std::string>("people_topic", "/people");
 
   const auto sync_queue_size = static_cast<int>(declare_parameter<std::int64_t>("sync_queue_size", 10));
@@ -69,10 +93,22 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   depth_min_m_ = declare_parameter<double>("depth_min_m", 0.1);
   depth_max_m_ = declare_parameter<double>("depth_max_m", 3.0);
 
+  // ── Position noise ────────────────────────────────────────────────────────
+  // Feeds the velocity window's consistency test; see positionVariance().
+  pixel_sigma_frac_ = declare_parameter<double>("pixel_sigma_frac", 0.25);
+  depth_spread_gain_ = declare_parameter<double>("depth_spread_gain", 1.0);
+  depth_noise_coeff_ = declare_parameter<double>("depth_noise_coeff", 0.0014);
+
+  cmd_vel_timeout_ = rclcpp::Duration::from_seconds(declare_parameter<double>("cmd_vel_timeout", 0.5));
+
+  // ── Output ────────────────────────────────────────────────────────────────
+  publish_covariance_tags_ = declare_parameter<bool>("publish_covariance_tags", false);
+
   // ── Collaborators ─────────────────────────────────────────────────────────
   // Each declares its own parameters on this node, so they come after the block
   // above. One per README section; see the class comment.
   depth_reader_ = std::make_unique<DepthReader>(*this, depth_min_m_, depth_max_m_);
+  tracker_ = std::make_unique<PersonTracker>(*this);
   debug_ = std::make_unique<DebugVisualizer>(*this);
 
   // ── Wiring ────────────────────────────────────────────────────────────────
@@ -93,11 +129,14 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
       camera_info_topic, 10,
       [this](const sensor_msgs::msg::CameraInfo::ConstSharedPtr& msg) { cameraInfoCallback(msg); });
+  cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+      cmd_vel_topic, 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) { cmdVelCallback(msg); });
 
   people_pub_ = create_publisher<people_msgs::msg::People>(people_topic, 10);
 
-  RCLCPP_INFO(get_logger(), "people_estimation started | detections=%s | depth=%s | camera_info=%s -> %s",
-              detections_topic.c_str(), depth_topic.c_str(), camera_info_topic.c_str(), people_topic.c_str());
+  RCLCPP_INFO(get_logger(), "people_estimation started | detections=%s | depth=%s | camera_info=%s | cmd_vel=%s -> %s",
+              detections_topic.c_str(), depth_topic.c_str(), camera_info_topic.c_str(), cmd_vel_topic.c_str(),
+              people_topic.c_str());
 }
 
 // ── Callbacks ───────────────────────────────────────────────────────────────
@@ -117,6 +156,30 @@ void PeopleEstimationNode::cameraInfoCallback(const sensor_msgs::msg::CameraInfo
   const std::lock_guard<std::mutex> lock(camera_info_mutex_);
   camera_model_.fromCameraInfo(*msg);
   camera_info_received_ = true;
+}
+
+void PeopleEstimationNode::cmdVelCallback(const geometry_msgs::msg::Twist::ConstSharedPtr& msg)
+{
+  const std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
+  cmd_vel_ = *msg;
+  // Twist is unstamped, so arrival time is the best stamp available.
+  cmd_vel_stamp_ = now();
+  cmd_vel_received_ = true;
+}
+
+std::optional<geometry_msgs::msg::Twist> PeopleEstimationNode::latestCmdVel()
+{
+  const std::lock_guard<std::mutex> lock(cmd_vel_mutex_);
+  if (!cmd_vel_received_)
+  {
+    return std::nullopt;
+  }
+  // 0 disables the staleness check, for bags with sparse cmd_vel.
+  if (cmd_vel_timeout_ > rclcpp::Duration(0, 0) && (now() - cmd_vel_stamp_) > cmd_vel_timeout_)
+  {
+    return std::nullopt;
+  }
+  return cmd_vel_;
 }
 
 void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDetections::ConstSharedPtr& detections,
@@ -139,6 +202,20 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
     return;
   }
 
+  const double stamp = rclcpp::Time(detections->header.stamp).seconds();
+
+  // ── Integrate the camera's own yaw ────────────────────────────────────────
+  // The only thing cmd_vel is used for here: a robot turn bends a stationary
+  // person's track, which would otherwise collapse every velocity window during
+  // every turn. See the README.
+  const std::optional<geometry_msgs::msg::Twist> cmd_vel = latestCmdVel();
+  const double omega_z = cmd_vel.has_value() ? cmd_vel->angular.z : 0.0;
+  if (previous_detection_stamp_.has_value() && stamp > *previous_detection_stamp_)
+  {
+    cumulative_yaw_ += omega_z * (stamp - *previous_detection_stamp_);
+  }
+  previous_detection_stamp_ = stamp;
+
   // ── Per-detection processing ──────────────────────────────────────────────
   people_msgs::msg::People people;
   people.header = detections->header;
@@ -149,12 +226,14 @@ void PeopleEstimationNode::detectionsCallback(const riskam_msgs::msg::PersonDete
 
   for (const auto& detection : detections->detections)
   {
-    std::optional<people_msgs::msg::Person> person = processDetection(*depth_m, detection);
+    std::optional<people_msgs::msg::Person> person = processDetection(*depth_m, detection, stamp);
     if (person.has_value())
     {
       people.people.push_back(std::move(*person));
     }
   }
+
+  tracker_->dropStale(stamp);
 
   people_pub_->publish(people);
 
@@ -195,8 +274,31 @@ std::optional<cv::Mat> PeopleEstimationNode::decodeDepth(const sensor_msgs::msg:
   return depth_m;
 }
 
-std::optional<people_msgs::msg::Person>
-PeopleEstimationNode::processDetection(const cv::Mat& depth_m, const riskam_msgs::msg::PersonDetection& detection)
+Eigen::Vector3d PeopleEstimationNode::positionVariance(const cv::Point3d& ray, const DepthEstimate& depth,
+                                                       double bbox_width, double bbox_height, double fx,
+                                                       double fy) const
+{
+  const double sigma_u = pixel_sigma_frac_ * bbox_width;
+  const double sigma_v = pixel_sigma_frac_ * bbox_height;
+  const double noise_floor = depth_noise_coeff_ * depth.depth_m * depth.depth_m;
+  // On the whole-bbox fallback the spread is the gap to the background, which
+  // says nothing about how well this person's distance is known.
+  const double sigma_z =
+      depth.from_bbox_fallback ? noise_floor : std::max(depth_spread_gain_ * depth.spread_m, noise_floor);
+
+  // Jacobian of P = ray * z with respect to (u, v, z): the depth term lands
+  // along the ray and the pixel terms across it. Diagonal only: the window
+  // test reads one axis at a time.
+  Eigen::Matrix3d jacobian;
+  jacobian << depth.depth_m / fx, 0.0, ray.x,  //
+      0.0, depth.depth_m / fy, ray.y,          //
+      0.0, 0.0, ray.z;
+  const Eigen::Vector3d pixel_and_depth_variance{ sigma_u * sigma_u, sigma_v * sigma_v, sigma_z * sigma_z };
+  return (jacobian * pixel_and_depth_variance.asDiagonal() * jacobian.transpose()).diagonal();
+}
+
+std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
+    const cv::Mat& depth_m, const riskam_msgs::msg::PersonDetection& detection, double stamp)
 {
   const DepthEstimate depth = depth_reader_->read(depth_m, detection);
 
@@ -208,28 +310,53 @@ PeopleEstimationNode::processDetection(const cv::Mat& depth_m, const riskam_msgs
 
   const cv::Point2d anchor = anchorPixel(detection);
   cv::Point3d ray;
+  double fx = 0.0;
+  double fy = 0.0;
   {
     const std::lock_guard<std::mutex> lock(camera_info_mutex_);
     ray = camera_model_.projectPixelTo3dRay(anchor);
+    fx = camera_model_.fx();
+    fy = camera_model_.fy();
   }
+
+  const Eigen::Vector3d position = Eigen::Vector3d(ray.x, ray.y, ray.z) * depth.depth_m;
+
+  const double bbox_width = std::abs(static_cast<double>(detection.bbox[2] - detection.bbox[0]));
+  const double bbox_height = std::abs(static_cast<double>(detection.bbox[3] - detection.bbox[1]));
+  const Eigen::Vector3d variance = positionVariance(ray, depth, bbox_width, bbox_height, fx, fy);
+
+  // ByteTrack reports every unassociated detection as -1; those have no identity
+  // to hold a history against, so they pass through as measured, with the velocity
+  // reported unknown rather than zero.
+  const TrackUpdate update = detection.track_id >= 0 ?
+                                 tracker_->update(detection.track_id, stamp, position, variance, cumulative_yaw_) :
+                                 TrackUpdate{ position, tracker_->priorFit(), 0.0 };
 
   // ── Assemble the Person ───────────────────────────────────────────────────
   people_msgs::msg::Person person;
-  // ByteTrack reports every unassociated detection as -1, so those all share one
-  // id and need a name of their own to be told apart.
   person.name = detection.track_id >= 0 ? "person_" + std::to_string(detection.track_id) :
                                           "person_untracked_" + std::to_string(untracked_in_message_++);
-  person.position.x = ray.x * depth.depth_m;
-  person.position.y = ray.y * depth.depth_m;
-  person.position.z = ray.z * depth.depth_m;
+  person.position = tf2::toMsg(update.position);
+  person.velocity = tf2::toMsg(update.fit.velocity);
   // Every detection that got this far is equally believed: there is no model yet
   // of how confident this measurement is.
   person.reliability = 1.0;
 
-  // people_msgs/Person has no field for these, so tagnames/tags carry them.
-  // See the README.
+  // people_msgs/Person has no field for the depth diagnostics, so tagnames/tags
+  // carry them. Always published: dropping a person is diagnosed from these.
   person.tagnames = { "depth_valid_frac", "depth_spread_m" };
   person.tags = { std::to_string(depth.valid_frac), std::to_string(depth.spread_m) };
+
+  if (publish_covariance_tags_)
+  {
+    // The velocity numbers ride along the same way, in this message's frame.
+    // See the README.
+    const std::array<double, 9> velocity_covariance{ { update.fit.variance[0], 0.0, 0.0, 0.0, update.fit.variance[1],
+                                                       0.0, 0.0, 0.0, update.fit.variance[2] } };
+    person.tagnames.insert(person.tagnames.end(), { "velocity_covariance", "n_history_samples", "velocity_window_s" });
+    person.tags.insert(person.tags.end(), { formatCovariance(velocity_covariance), std::to_string(update.fit.n_samples),
+                                            std::to_string(update.window_s) });
+  }
 
   return person;
 }

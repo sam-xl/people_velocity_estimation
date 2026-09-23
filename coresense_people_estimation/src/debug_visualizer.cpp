@@ -15,19 +15,25 @@
 #include "coresense_people_estimation/debug_visualizer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "people_msgs/msg/people.hpp"
 #include "people_msgs/msg/person.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
+#include "tf2/LinearMath/Quaternion.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "tf2_ros/transform_broadcaster.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
@@ -35,8 +41,9 @@
 namespace
 {
 /// Marker namespaces. Each is independently toggleable in RViz, so keeping
-/// positions and labels apart is worth the extra ids.
+/// positions, velocities and labels apart is worth the extra ids.
 constexpr char kNsPeople[] = "people";
+constexpr char kNsVelocity[] = "velocity";
 constexpr char kNsLabel[] = "label";
 
 struct Rgba
@@ -45,12 +52,26 @@ struct Rgba
 };
 
 constexpr Rgba kPersonColor{ 0.20F, 0.85F, 0.35F, 0.85F };
+constexpr Rgba kVelocityColor{ 0.10F, 0.95F, 0.85F, 0.95F };
 constexpr Rgba kLabelColor{ 1.00F, 1.00F, 1.00F, 0.90F };
+
+/// Shortest arrow worth drawing, in metres. RViz logs a warning for every
+/// zero-length arrow it is handed, once per marker per frame.
+constexpr double kMinArrowLength = 1e-3;
+
+/// Arrow thickness as fractions of the person radius, so an arrow stays legible
+/// against the sphere it comes out of whatever `debug_person_radius` is.
+constexpr double kShaftDiameterFrac = 0.25;
+constexpr double kHeadDiameterFrac = 0.60;
+constexpr double kHeadLengthFrac = 0.80;
 
 /// Label placement and size as fractions of the person radius, so the text clears
 /// the sphere and stays proportionate whatever `debug_person_radius` is.
 constexpr double kLabelHeightAboveCentreFrac = 1.5;
 constexpr double kLabelTextHeightFrac = 1.2;
+
+/// Enough for " | 12.34 m/s" and the terminator.
+constexpr std::size_t kSpeedSuffixSize = 32;
 
 visualization_msgs::msg::Marker makeMarker(const std_msgs::msg::Header& header, const std::string& ns, int id,
                                            int32_t type, const Rgba& color, const rclcpp::Duration& lifetime)
@@ -70,10 +91,36 @@ visualization_msgs::msg::Marker makeMarker(const std_msgs::msg::Header& header, 
   return marker;
 }
 
-/// "person_3" — the person's identity, without having to echo the topic alongside RViz.
-std::string personLabel(const people_msgs::msg::Person& person, std::size_t index)
+/// Lays an ARROW marker out as start point plus displacement, sizing the shaft
+/// and head off `radius` so arrows stay legible whatever the person scale is.
+/// Returns false when the displacement is too short to draw.
+bool setArrow(visualization_msgs::msg::Marker& marker, const geometry_msgs::msg::Point& start, double dx, double dy,
+              double dz, double radius)
 {
-  return person.name.empty() ? "#" + std::to_string(index) : person.name;
+  if (std::hypot(dx, dy, dz) < kMinArrowLength)
+  {
+    return false;
+  }
+
+  geometry_msgs::msg::Point tip;
+  tip.x = start.x + dx;
+  tip.y = start.y + dy;
+  tip.z = start.z + dz;
+
+  marker.points = { start, tip };
+  marker.scale.x = kShaftDiameterFrac * radius;
+  marker.scale.y = kHeadDiameterFrac * radius;
+  marker.scale.z = kHeadLengthFrac * radius;
+  return true;
+}
+
+/// "person_3 | 1.24 m/s" — the person's identity plus the number you actually want to
+/// sanity-check, without having to echo the topic alongside RViz.
+std::string personLabel(const people_msgs::msg::Person& person, std::size_t index, double speed)
+{
+  std::array<char, kSpeedSuffixSize> buffer{};
+  std::snprintf(buffer.data(), buffer.size(), " | %.2f m/s", speed);
+  return (person.name.empty() ? "#" + std::to_string(index) : person.name) + buffer.data();
 }
 
 /// TF frame ids may not contain arbitrary characters, and a person's name comes
@@ -96,6 +143,7 @@ DebugVisualizer::DebugVisualizer(rclcpp::Node& node)
   debug_ = node_.declare_parameter<bool>("debug", false);
   const std::string debug_topic = node_.declare_parameter<std::string>("debug_topic", "~/debug_markers");
   debug_person_frames_ = node_.declare_parameter<bool>("debug_person_frames", true);
+  debug_velocity_scale_ = node_.declare_parameter<double>("debug_velocity_scale", 1.0);
   debug_person_radius_ = node_.declare_parameter<double>("debug_person_radius", 0.2);
   debug_marker_lifetime_ =
       rclcpp::Duration::from_seconds(node_.declare_parameter<double>("debug_marker_lifetime", 0.5));
@@ -125,11 +173,14 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
   }
 
   visualization_msgs::msg::MarkerArray array;
-  // A sphere and a label per person.
-  array.markers.reserve(2 * people.people.size());
+  // A sphere, an arrow and a label per person.
+  array.markers.reserve(3 * people.people.size());
 
   const int type_sphere = visualization_msgs::msg::Marker::SPHERE;
+  const int type_arrow = visualization_msgs::msg::Marker::ARROW;
   const int type_text = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+
+  std::size_t velocity_count = 0;
 
   for (std::size_t i = 0; i < people.people.size(); ++i)
   {
@@ -142,16 +193,30 @@ void DebugVisualizer::publish(const people_msgs::msg::People& people)
     sphere.scale.x = sphere.scale.y = sphere.scale.z = 2.0 * debug_person_radius_;
     array.markers.push_back(std::move(sphere));
 
+    // Velocity, as a look-ahead arrow.
+    const double speed = std::hypot(person.velocity.x, person.velocity.y, person.velocity.z);
+    auto arrow = makeMarker(people.header, kNsVelocity, id, type_arrow, kVelocityColor, debug_marker_lifetime_);
+    if (setArrow(arrow, person.position, person.velocity.x * debug_velocity_scale_,
+                 person.velocity.y * debug_velocity_scale_, person.velocity.z * debug_velocity_scale_,
+                 debug_person_radius_))
+    {
+      // Arrow ids must stay dense from 0 for the stale-marker sweep to work,
+      // so a skipped (near-stationary) person does not burn an id.
+      arrow.id = static_cast<int>(velocity_count++);
+      array.markers.push_back(std::move(arrow));
+    }
+
     // Label, floating above the sphere.
     auto label = makeMarker(people.header, kNsLabel, id, type_text, kLabelColor, debug_marker_lifetime_);
     label.pose.position = person.position;
     label.pose.position.z += kLabelHeightAboveCentreFrac * debug_person_radius_;
     label.scale.z = kLabelTextHeightFrac * debug_person_radius_;
-    label.text = personLabel(person, i);
+    label.text = personLabel(person, i, speed);
     array.markers.push_back(std::move(label));
   }
 
   reapStaleMarkers(array, kNsPeople, people.people.size());
+  reapStaleMarkers(array, kNsVelocity, velocity_count);
   reapStaleMarkers(array, kNsLabel, people.people.size());
 
   debug_marker_pub_->publish(array);
@@ -207,9 +272,16 @@ void DebugVisualizer::publishPersonFrames(const people_msgs::msg::People& people
     tf.transform.translation.y = person.position.y;
     tf.transform.translation.z = person.position.z;
 
-    // The frame keeps the parent's orientation: a position carries no heading
-    // to align it to.
-    tf.transform.rotation.w = 1.0;
+    // Yaw the frame along the direction of travel so heading is readable from
+    // the axes alone; a person who is not moving keeps the parent frame's
+    // orientation rather than snapping to an arbitrary one. The frame is
+    // optical — x right, y down, z forward — so heading lives in the x-z plane
+    // and its axis is -y, not z.
+    const double ground_speed = std::hypot(person.velocity.x, person.velocity.z);
+    const double heading = ground_speed > kMinArrowLength ? std::atan2(person.velocity.x, person.velocity.z) : 0.0;
+    tf2::Quaternion q;
+    q.setRPY(0.0, -heading, 0.0);
+    tf.transform.rotation = tf2::toMsg(q);
 
     transforms.push_back(std::move(tf));
   }

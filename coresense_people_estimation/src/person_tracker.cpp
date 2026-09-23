@@ -1,0 +1,283 @@
+// Copyright 2026 TU Delft / SAM XL
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include "coresense_people_estimation/person_tracker.hpp"
+
+#include <Eigen/Dense>
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <iterator>
+
+#include "rclcpp/rclcpp.hpp"
+
+namespace
+{
+/// Fewest samples the reduced chi-square has a degree of freedom left at, given
+/// the two the straight line itself costs.
+constexpr std::size_t kMinChiSquareSamples = 4;
+
+/// Keeps a residual out of a division by a vanishing variance.
+constexpr double kVarianceFloor = 1e-12;
+
+/// Rotation about the camera's vertical by a robot yaw of `angle`. The colour
+/// optical frame is x-right, y-down, z-forward, so the yaw axis is optical -y
+/// and a left turn works out to Ry(+angle). Pitch and roll are ignored.
+Eigen::Matrix3d yawRotation(double angle)
+{
+  return Eigen::AngleAxisd(angle, Eigen::Vector3d::UnitY()).toRotationMatrix();
+}
+}  // namespace
+
+namespace coresense_people_estimation
+{
+
+PersonTracker::PersonTracker(rclcpp::Node& node)
+{
+  velocity_prior_variance_ = node.declare_parameter<double>("velocity_prior_variance", 1.0);
+
+  velocity_window_max_s_ = node.declare_parameter<double>("velocity_window_max_s", 2.0);
+  velocity_window_min_s_ = node.declare_parameter<double>("velocity_window_min_s", 0.6);
+  velocity_window_chi2_max_ = node.declare_parameter<double>("velocity_window_chi2_max", 3.0);
+  velocity_window_sigma_scale_ = node.declare_parameter<double>("velocity_window_sigma_scale", 0.25);
+  velocity_gait_sigma_m_ = node.declare_parameter<double>("velocity_gait_sigma_m", 0.03);
+  velocity_min_span_s_ = node.declare_parameter<double>("velocity_min_span_s", 0.3);
+  velocity_epsilon_ = node.declare_parameter<double>("velocity_epsilon", 0.05);
+  velocity_max_gap_s_ = node.declare_parameter<double>("velocity_max_gap_s", 0.5);
+  const auto declared_maxlen = node.declare_parameter<std::int64_t>("history_maxlen", 60);
+  if (declared_maxlen < static_cast<std::int64_t>(kMinFitSamples))
+  {
+    RCLCPP_WARN(node.get_logger(),
+                "history_maxlen of %ld cannot hold a fit; raising it to %zu. Below that every velocity is zero.",
+                declared_maxlen, kMinFitSamples);
+  }
+  history_maxlen_ = static_cast<std::size_t>(std::max(declared_maxlen, static_cast<std::int64_t>(kMinFitSamples)));
+}
+
+TrackUpdate PersonTracker::update(std::int32_t track_id, double stamp, const Eigen::Vector3d& position,
+                                  const Eigen::Vector3d& variance, double cumulative_yaw)
+{
+  Track& track = tracks_[track_id];
+
+  // A gap wide enough that this may not be the same person clears the history
+  // rather than having a slope fitted across it.
+  pruneHistory(track.history, stamp);
+  track.history.push_back(Sample{ stamp, position, variance, cumulative_yaw });
+  while (track.history.size() > history_maxlen_)
+  {
+    track.history.pop_front();
+  }
+
+  const AdaptiveFit adaptive = fitAdaptive(track.history);
+  return TrackUpdate{ position, adaptive.fit, adaptive.window_s };
+}
+
+VelocityFit PersonTracker::priorFit() const
+{
+  VelocityFit fit;
+  fit.variance.setConstant(velocity_prior_variance_);
+  return fit;
+}
+
+PersonTracker::AdaptiveFit PersonTracker::fitAdaptive(const std::deque<Sample>& history) const
+{
+  AdaptiveFit result;
+  // Below a minimum baseline there is no velocity worth reporting; see the README.
+  if (history.size() < kMinFitSamples || (history.back().stamp - history.front().stamp) < velocity_min_span_s_)
+  {
+    result.fit = priorFit();
+    result.fit.n_samples = history.size();
+    return result;
+  }
+
+  const std::size_t n = selectWindow(history);
+  std::deque<Sample> window(history.end() - static_cast<std::ptrdiff_t>(n), history.end());
+  result.window_s = window.back().stamp - window.front().stamp;
+  result.fit = fitVelocity(window);
+
+  // Under the noise floor there is no direction, only the residual wobble of a
+  // person standing still. See the README.
+  if (result.fit.velocity.norm() < velocity_epsilon_)
+  {
+    result.fit.velocity.setZero();
+  }
+  return result;
+}
+
+std::size_t PersonTracker::selectWindow(const std::deque<Sample>& history) const
+{
+  // Judged on de-rotated samples but fitted on the raw ones, so that a robot turn
+  // neither collapses the window nor moves the published, body-fixed value.
+  // See the README.
+  const std::deque<Sample> judged = derotate(history);
+
+  std::size_t n = history.size();
+  while (n > kMinFitSamples)
+  {
+    std::deque<Sample> window(judged.end() - static_cast<std::ptrdiff_t>(n), judged.end());
+    // Never shorten below the floor: about one gait oscillation.
+    if ((window.back().stamp - window.front().stamp) <= velocity_window_min_s_)
+    {
+      break;
+    }
+    if (windowChiSquare(window, fitVelocity(window)) <= velocity_window_chi2_max_)
+    {
+      break;
+    }
+    --n;
+  }
+  return n;
+}
+
+double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const VelocityFit& fit) const
+{
+  // Reduced chi-square of the constant-velocity model, per axis and worst of the
+  // three: a pooled statistic buries a one-axis manoeuvre. See the README.
+
+  // Zero reads as "consistent", which is the right answer here: with no degree
+  // of freedom left there is nothing to test, so the window must not shorten.
+  if (window.size() < kMinChiSquareSamples)
+  {
+    return 0.0;
+  }
+  const auto n = static_cast<double>(window.size());
+
+  Eigen::Matrix<double, 2, 3> coefficients;
+  coefficients << fit.velocity.transpose(), fit.intercept.transpose();
+  const Eigen::MatrixX3d residual = positions(window) - designMatrix(window) * coefficients;
+
+  // Residuals are judged against frame-to-frame repeatability rather than the
+  // absolute position error, with gait as the floor under it. See the README.
+  const double gait_var = velocity_gait_sigma_m_ * velocity_gait_sigma_m_;
+  const double sigma_scale_sq = velocity_window_sigma_scale_ * velocity_window_sigma_scale_;
+  Eigen::MatrixX3d variance(window.size(), 3);
+  for (std::size_t i = 0; i < window.size(); ++i)
+  {
+    variance.row(i) = (sigma_scale_sq * window[i].variance.array() + gait_var).max(kVarianceFloor);
+  }
+
+  const Eigen::RowVector3d chi2 = (residual.array().square() / variance.array()).colwise().sum();
+  return chi2.maxCoeff() / (n - 2.0);
+}
+
+std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sample>& history) const
+{
+  std::deque<Sample> rotated = history;
+  if (rotated.empty())
+  {
+    return rotated;
+  }
+  const double yaw_now = rotated.back().cumulative_yaw;
+  for (Sample& sample : rotated)
+  {
+    const Eigen::Matrix3d rotation = yawRotation(yaw_now - sample.cumulative_yaw);
+    sample.position = rotation * sample.position;
+    // The uncertainty turns with the point. The variances are per-axis, so the
+    // x-z cross-covariance the turn creates is dropped again — exact only while
+    // it is negligible. See the README.
+    sample.variance = (rotation * sample.variance.asDiagonal() * rotation.transpose()).diagonal();
+  }
+  return rotated;
+}
+
+VelocityFit PersonTracker::fitVelocity(const std::deque<Sample>& history) const
+{
+  VelocityFit fit;
+  fit.n_samples = history.size();
+  if (history.size() < 2)
+  {
+    fit.variance = priorFit().variance;
+    return fit;
+  }
+
+  // Least squares for p(t) = v t + b, one column per axis.
+  const Eigen::MatrixX2d design = designMatrix(history);
+  const Eigen::MatrixX3d observed = positions(history);
+  const Eigen::ColPivHouseholderQR<Eigen::MatrixX2d> qr(design);
+  if (qr.rank() < 2)
+  {
+    // Every sample shares a timestamp: no time base, so no slope.
+    fit.variance = priorFit().variance;
+    return fit;
+  }
+  const Eigen::Matrix<double, 2, 3> coefficients = qr.solve(observed);
+  fit.velocity = coefficients.row(0);
+  fit.intercept = coefficients.row(1);
+
+  if (history.size() < kMinFitSamples)
+  {
+    // Two samples fit exactly, so there is no residual to estimate a variance from.
+    fit.variance = priorFit().variance;
+    return fit;
+  }
+
+  // Var(v) = sigma^2 (A^T A)^-1_00, with sigma^2 the residual variance at n - 2
+  // degrees of freedom.
+  const auto n = static_cast<double>(history.size());
+  const Eigen::Vector3d residual_sq = (observed - design * coefficients).colwise().squaredNorm();
+  const double slope_gain = (design.transpose() * design).inverse()(0, 0);
+  fit.variance = residual_sq / (n - 2.0) * slope_gain;
+  return fit;
+}
+
+Eigen::MatrixX2d PersonTracker::designMatrix(const std::deque<Sample>& history)
+{
+  Eigen::MatrixX2d design(history.size(), 2);
+  const double t0 = history.front().stamp;
+  for (std::size_t i = 0; i < history.size(); ++i)
+  {
+    design.row(i) << history[i].stamp - t0, 1.0;
+  }
+  return design;
+}
+
+Eigen::MatrixX3d PersonTracker::positions(const std::deque<Sample>& history)
+{
+  Eigen::MatrixX3d observed(history.size(), 3);
+  for (std::size_t i = 0; i < history.size(); ++i)
+  {
+    observed.row(i) = history[i].position;
+  }
+  return observed;
+}
+
+void PersonTracker::pruneHistory(std::deque<Sample>& history, double now) const
+{
+  // A gap this long means the track was not observed for most of a window.
+  if (!history.empty() && (now - history.back().stamp) > velocity_max_gap_s_)
+  {
+    history.clear();
+    return;
+  }
+  while (!history.empty() && (now - history.front().stamp) > velocity_window_max_s_)
+  {
+    history.pop_front();
+  }
+}
+
+void PersonTracker::dropStale(double now)
+{
+  // A track with nothing left inside the longest window contributes nothing but
+  // a map entry. Absolute value because a looping bag walks the clock backwards.
+  for (auto it = tracks_.begin(); it != tracks_.end();)
+  {
+    const std::deque<Sample>& history = it->second.history;
+    const bool stale = history.empty() || std::abs(now - history.back().stamp) > velocity_window_max_s_;
+    it = stale ? tracks_.erase(it) : std::next(it);
+  }
+}
+
+}  // namespace coresense_people_estimation

@@ -30,7 +30,8 @@ namespace coresense_people_estimation
 /// Draws what the pipeline computed, so the geometry can be checked by eye.
 ///
 /// The output topic carries plausible-looking numbers whether or not the depth
-/// read is right; markers in RViz are what tell the two apart. See the README.
+/// read and the velocity fit are right; markers in RViz are what tell the two
+/// apart. See the README.
 ///
 /// Not a node: it declares its parameters on the owning node and publishes
 /// through it. Off is genuinely off — with `debug` false neither the marker
@@ -40,13 +41,15 @@ class DebugVisualizer
 public:
   explicit DebugVisualizer(rclcpp::Node& node);
 
-  /// Draws one frame's worth of geometry: a sphere and a label per person, in
-  /// whatever frame `people` carries. No-op unless `debug` is set.
+  /// Draws one frame's worth of geometry: a sphere, a look-ahead arrow and a
+  /// label per person, in whatever frame `people` carries. No-op unless `debug`
+  /// is set.
   void publish(const people_msgs::msg::People& people);
 
 private:
-  /// Broadcasts one TF frame per person, positioned at their position, so a
-  /// person can be picked out straight from the TF display.
+  /// Broadcasts one TF frame per person, positioned at their position and yawed
+  /// along their velocity, so a person's heading can be read straight off the
+  /// TF display.
   void publishPersonFrames(const people_msgs::msg::People& people);
 
   /// Appends DELETE markers for ids published into `ns` last frame that this
@@ -61,6 +64,9 @@ private:
   // ── Parameters ────────────────────────────────────────────────────────────
   bool debug_;
   bool debug_person_frames_;
+  /// Seconds of look-ahead an arrow represents: its length is speed * this, so
+  /// at 1.0 the tip sits where the person would be one second from now.
+  double debug_velocity_scale_;
   double debug_person_radius_;
   rclcpp::Duration debug_marker_lifetime_{ 0, 0 };
 

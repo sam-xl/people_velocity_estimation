@@ -5,8 +5,9 @@
   <version>0.0.1</version>
   <description>
     Turns riskam_msgs/PersonDetections into people_msgs/People: samples depth
-    under each detection and back-projects it through the camera model.
-    Positions are published in the colour optical frame, relative to the robot.
+    under each detection, back-projects it through the camera model, and fits a
+    per-track velocity over a short, adaptively chosen history. Positions and
+    velocities are published in the colour optical frame, relative to the robot.
   </description>
   <maintainer email="G.Sotirchos@tudelft.nl">George Sotirchos</maintainer>
   <license>Apache-2.0</license>
@@ -14,6 +15,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>cv_bridge</depend>
+  <depend>eigen</depend>
   <depend>geometry_msgs</depend>
   <depend>image_geometry</depend>
   <depend>message_filters</depend>
@@ -22,6 +24,9 @@
   <depend>rclcpp_components</depend>
   <depend>riskam_msgs</depend>
   <depend>sensor_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
 

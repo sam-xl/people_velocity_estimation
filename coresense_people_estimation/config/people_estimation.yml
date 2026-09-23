@@ -4,45 +4,88 @@
   ros__parameters:
     # ── Topics ──────────────────────────────────────────────────────────────
     detections_topic: /riskam/person_detections
-    # MUST be depth registered to the COLOUR frame. Bounding boxes and keypoints
-    # are colour-image pixels, and /camera/camera/depth/image_rect_raw is in
-    # camera_depth_optical_frame with a wider FOV and a different focal length,
-    # so indexing it with colour coordinates reads the wrong part of the scene.
-    # Needs align_depth.enable: true on the driver.
+    # Must be depth registered to the colour frame (align_depth.enable: true on
+    # the driver); the raw depth image has a different FOV and focal length.
     depth_topic: /camera/camera/aligned_depth_to_color/image_raw
     camera_info_topic: /camera/camera/color/camera_info
-    # Positions go out in the colour optical frame, relative to the robot.
+    cmd_vel_topic: /cmd_vel
+    # Output, in the colour optical frame relative to the robot.
     people_topic: /people
-    # Detections and depth are paired by stamp, with the same slop riskam_node
-    # uses to pair colour and depth upstream.
+    # Stamp pairing of detections and depth; same slop as riskam_node.
     sync_queue_size: 10
     sync_slop: 0.1
 
     # ── Depth read-out ──────────────────────────────────────────────────────
-    # Percentile for the whole-bbox fallback, and in both cases the low end of
-    # the reported depth spread.
+    # Percentile of the box's depth readings used when no torso keypoint is
+    # usable; also the low end of the spread that sizes the depth sigma.
     depth_percentile: 10.0
     # Half-width in pixels of the patch sampled around each torso keypoint.
-    # Depth images are speckled with dropouts, which a single pixel would hit.
     keypoint_patch_radius: 3
-    # Readings outside this band are treated as missing. depth_min_m matches
-    # riskam.ml.depth.DEPTH_MIN_M.
+    # Valid depth band in metres; readings outside it count as missing.
+    # depth_min_m matches riskam.ml.depth.DEPTH_MIN_M.
     depth_min_m: 0.1
     depth_max_m: 3.0
 
+    # ── Position noise ──────────────────────────────────────────────────────
+    # Per-sample position sigma, used only by the velocity window test (see
+    # the README). Not published.
+    #
+    # Anchor pixel sigma, as a fraction of the bounding box size.
+    pixel_sigma_frac: 0.25
+    # Depth sigma is the larger of (depth_spread_gain x measured depth spread)
+    # and (depth_noise_coeff x z^2). 0.0014 suits a RealSense D435 at defaults.
+    depth_spread_gain: 1.0
+    depth_noise_coeff: 0.0014
+    # Velocity variance in m^2/s^2 reported when the fit cannot produce one
+    # (fewer than three samples, or all sharing a stamp).
+    velocity_prior_variance: 1.0
+
+    # ── Velocity window ─────────────────────────────────────────────────────
+    # Longest and shortest window in seconds (~20 and ~6 samples at 10 Hz).
+    # Raise the floor for smoother output, lower it to react faster to stops.
+    velocity_window_max_s: 2.0
+    velocity_window_min_s: 0.6
+    # Reduced chi-square above which the window shortens; 1 means "exactly as
+    # noisy as expected". Lower for a more responsive, noisier estimate.
+    velocity_window_chi2_max: 3.0
+    # Fraction of the position sigma counted as frame-to-frame noise. Raise if
+    # the window collapses during straight-line walking.
+    velocity_window_sigma_scale: 0.25
+    # Expected gait sway amplitude in metres. Floors the window at ~1 cycle.
+    # Increase for smoother tracking, decrease for faster response to stops.
+    velocity_gait_sigma_m: 0.03
+    # Below this span of history in seconds the velocity is zero, with
+    # velocity_prior_variance. Mirrors riskam kinematics' min_span_s.
+    velocity_min_span_s: 0.3
+    # Speeds below this, in m/s, publish as exactly zero. Mirrors riskam
+    # kinematics' v_eps_ms.
+    velocity_epsilon: 0.05
+    # A track unseen for longer than this, in seconds, restarts its history.
+    velocity_max_gap_s: 0.5
+    # Cap on stored samples per track; 60 covers velocity_window_max_s at
+    # 30 Hz. Values below 3 are raised to 3.
+    history_maxlen: 60
+
+    # Seconds after which the last cmd_vel counts as "robot stationary"; 0
+    # disables the check. Only used to de-rotate the window by camera yaw.
+    cmd_vel_timeout: 0.5
+
+    # ── Output ──────────────────────────────────────────────────────────────
+    # Also publish velocity covariance, sample count and window length as
+    # tagnames/tags pairs. nav2 ignores them.
+    publish_covariance_tags: false
+
     # ── Debug visualisation ─────────────────────────────────────────────────
-    # Master switch. Off means no marker publisher and no TF broadcaster are
-    # created at all, so the settings below are inert. The launch file's
-    # debug:= argument overrides this value.
+    # Off creates no marker publisher or TF broadcaster. The launch file's
+    # debug:= argument overrides this.
     debug: false
-    # MarkerArray topic. "~/" resolves to /people_estimation/debug_markers.
+    # MarkerArray topic; "~/" resolves to /people_estimation/debug_markers.
     debug_topic: ~/debug_markers
-    # Broadcast one TF frame per person, at their position. Set false to keep
-    # the TF tree clean.
+    # Broadcast one TF frame per person, yawed along their velocity.
     debug_person_frames: true
-    # Radius of the person sphere, in metres. The text size derives from it, so
-    # this scales the whole drawing.
+    # Arrow length = speed x this many seconds of look-ahead.
+    debug_velocity_scale: 1.0
+    # Person sphere radius in metres; arrow and text sizes scale with it.
     debug_person_radius: 0.2
-    # How long markers survive without a refresh. Short enough that a stalled
-    # pipeline is visible as markers vanishing; 0 keeps them forever.
+    # Marker lifetime in seconds; 0 keeps them forever.
     debug_marker_lifetime: 0.5

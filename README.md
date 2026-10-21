@@ -1,4 +1,4 @@
-# coresense_people_estimation
+# people_velocity_estimation
 
 ## Overview
 
@@ -44,7 +44,7 @@ complete the workspace:
 
 ```bash
 cd ros_ws/src
-vcs import < coresense_people_estimation/.repos
+vcs import < people_velocity_estimation/.repos
 ```
 
 Install the dependencies of the cloned packages using `rosdep`:
@@ -63,7 +63,7 @@ colcon build
 ## Usage
 
 ```bash
-ros2 launch coresense_people_estimation people_estimation.launch
+ros2 launch people_velocity_estimation people_estimation.launch
 ```
 
 Override the parameter file with `config:=/path/to/your.yml`. Add `debug:=true` to draw the
@@ -82,8 +82,8 @@ throttled "Could not transform" warning. Nothing is published until `camera_info
 exercised with no localisation stack and no robot:
 
 ```bash
-ros2 run coresense_people_estimation dummy_tf.py               # map -> odom -> base_link -> camera
-ros2 launch coresense_people_estimation people_estimation.launch debug:=true
+ros2 run people_velocity_estimation dummy_tf.py               # map -> odom -> base_link -> camera
+ros2 launch people_velocity_estimation people_estimation.launch debug:=true
 ```
 
 #### Which invocation
@@ -144,7 +144,7 @@ A replay that carries the colour images but not their `camera_info` publishes no
 `bag_camera_shim.py` publishes a stand-in colour `camera_info`, paced by the depth stream:
 
 ```bash
-ros2 run coresense_people_estimation bag_camera_shim.py
+ros2 run people_velocity_estimation bag_camera_shim.py
 ```
 
 Pass `--color-intrinsics fx fy cx cy` when the real calibration is known — the defaults are
@@ -164,7 +164,7 @@ close enough to trust a number from. Both scripts take `--help`.
 
 ### `people_estimation`
 
-Also available as the composable component `coresense_people_estimation::PeopleEstimationNode`.
+Also available as the composable component `people_velocity_estimation::PeopleEstimationNode`.
 
 Confirms each detection has persisted, reads its depth, rejects posters and depth spikes,
 back-projects it, fits a velocity over an adaptive per-track window, re-frames it into
@@ -173,7 +173,7 @@ attaches a `reliability`; each stage is described in [`docs/`](./docs/index.md).
 
 #### Parameters
 
-See [`config/people_estimation.yml`](coresense_people_estimation/config/people_estimation.yml),
+See [`config/people_estimation.yml`](people_velocity_estimation/config/people_estimation.yml),
 which documents every parameter inline.
 
 #### Published Topics

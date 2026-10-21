@@ -1,4 +1,4 @@
-# coresense_people_estimation <!-- omit in toc -->
+# people_velocity_estimation <!-- omit in toc -->
 
 [[_TOC_]]
 

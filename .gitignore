@@ -24,9 +24,8 @@ CATKIN_IGNORE*
 # VSCode
 .vscode/
 
-# Local CI cache
-.gitlab-ci-local/
-.ci_cache/
+# Local industrial_ci BASEDIR
+.work/
 
 # Other
 *.pcd

@@ -10,4 +10,4 @@ repositories:
   risk-awareness-module:
     type: git
     url: https://github.com/sam-xl/risk-awareness-module.git
-    version: 8459483ca04c37ab69303d64d5e4e385cd2f569d  # main on 21-08-2026
+    version: velocity_estimator

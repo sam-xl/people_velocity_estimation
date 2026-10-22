@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clang_format:
+    name: C++ (clang-format) linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      # rosdep fix (ros-industrial/industrial_ci#876) and clang versions newer than the base image's
+      - uses: sam-xl/industrial_ci@rosdep_fix_and_recent_clang_versions
+        env:
+          ROS_DISTRO: jazzy
+          CLANG_FORMAT_CHECK: file
+          CLANG_FORMAT_VERSION: "18"
+
+  python_lint:
+    name: Python (ruff) linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - run: pip install -r .ci/python/requirements.txt
+      - run: .ci/python/lint.sh
+
+  xml_lint:
+    name: XML (xmllint) validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+      - run: sudo apt-get -qq update && sudo apt-get -qq install libxml2-utils
+      - run: .ci/xml/validate_xml.sh
+
+  ros_jazzy:
+    name: ROS jazzy build and test
+    runs-on: ubuntu-latest
+    env:
+      # inside the checkout so the logs and results can be collected; industrial_ci excludes it from the sources
+      BASEDIR: ${{ github.workspace }}/.work
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: sam-xl/industrial_ci@rosdep_fix_and_recent_clang_versions
+        env:
+          ROS_DISTRO: jazzy
+          ROS_REPO: main
+          # riskam_msgs and people_msgs are source dependencies rosdep cannot resolve;
+          # the rest of risk-awareness-module is dropped as its pip-only rosdep keys fail under PEP 668
+          UPSTREAM_WORKSPACE: >-
+            .repos
+            -risk-awareness-module/riskam
+            -risk-awareness-module/riskam_ros
+            -risk-awareness-module/riskam_bringup
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ros_jazzy-logs-and-test-results
+          path: |
+            .work/target_ws/log*/**/*.log
+            .work/target_ws/build/*/test_results/*/*.xml
+          retention-days: 7
+      - uses: mikepenz/action-junit-report@v6.6.1
+        if: always()
+        with:
+          report_paths: .work/target_ws/build/*/test_results/*/*.xml

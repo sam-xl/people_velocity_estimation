@@ -31,3 +31,4 @@ Changes:
     - Drop a coasted track the moment its extrapolated position falls back inside the camera image, so an in-frame occlusion is never coasted through
     - Propagate position and velocity covariances, published as tags alongside a reliability score
 - Rename the package to people_velocity_estimation
+- Move CI to GitHub Actions

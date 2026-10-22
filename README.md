@@ -1,5 +1,10 @@
 # people_velocity_estimation
 
+[![Pipeline status](https://github.com/sam-xl/people_velocity_estimation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sam-xl/people_velocity_estimation/actions/workflows/ci.yml?query=branch%3Amain) \
+[![Latest Release](https://img.shields.io/github/v/release/sam-xl/people_velocity_estimation?sort=semver)](https://github.com/sam-xl/people_velocity_estimation/releases/latest) \
+[![Maturity](https://img.shields.io/badge/maturity-M1-blue.svg)](#) \
+[![License](https://img.shields.io/github/license/sam-xl/people_velocity_estimation)](LICENSE)
+
 ## Overview
 
 Turns 2-D person detections into `people_msgs/People`: samples depth under each detection,

@@ -1,12 +1,12 @@
-< Description of the MR, or the "what" >
+< Description of the PR, or the "what" >
 
 Fixes #X, related to #Y, #Z
 
-[comment]: # (To refer to GitLab issues in other repos, use the format: owner/repo#123 )
+[comment]: # (To refer to GitHub issues in other repos, use the format: owner/repo#123 )
 
 ## Motivation and Context
 
-[comment]: # (This section should make the MR understandable for anyone outside the project context)
+[comment]: # (This section should make the PR understandable for anyone outside the project context)
 
 < Why is this change implemented? Provide the motivation for this change and any relevant context. >
 

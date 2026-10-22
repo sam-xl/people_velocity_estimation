@@ -35,7 +35,7 @@ namespace people_velocity_estimation
 /// read, the velocity fit and the map transform are right; markers in RViz are
 /// what tell them apart. The transformed output and the raw sensor-frame input
 /// are drawn together deliberately: where the two disagree localises the fault.
-/// See the README.
+/// See docs/debug_visualisation.md.
 ///
 /// Not a node: it declares its parameters on the owning node and publishes
 /// through it. Off is genuinely off — with `debug` false neither the marker

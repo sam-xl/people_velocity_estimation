@@ -28,8 +28,8 @@ namespace people_velocity_estimation
 ///
 /// A detector that draws a box in a random spot for one frame and drops it the
 /// next has produced no evidence of a person. Nothing downstream can tell that
-/// box from a real one, so it is stopped here, ahead of everything else. See the
-/// README.
+/// box from a real one, so it is stopped here, ahead of everything else. See
+/// docs/confirmation.md.
 ///
 /// Not a node: it declares its parameters on the owning node and logs through
 /// it. Runs before the depth read rather than after, so an unconfirmed detection
@@ -44,7 +44,7 @@ public:
   bool confirmed(const riskam_msgs::msg::PersonDetection& detection, double stamp);
 
   /// Forget tracks that have stopped being seen, so churning ids cannot grow the
-  /// map. Also what makes the count consecutive; see the README.
+  /// map. Also what makes the count consecutive; see docs/confirmation.md.
   void dropStale(double now);
 
 private:

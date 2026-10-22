@@ -32,3 +32,4 @@ Changes:
     - Propagate position and velocity covariances, published as tags alongside a reliability score
 - Rename the package to people_velocity_estimation
 - Move CI to GitHub Actions
+- Add a component diagram and move the bench tooling docs to docs/

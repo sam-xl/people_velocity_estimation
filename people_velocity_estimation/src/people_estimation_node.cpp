@@ -75,7 +75,7 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
   // ── Topics ────────────────────────────────────────────────────────────────
   const std::string detections_topic = declare_parameter<std::string>("detections_topic", "/riskam/person_detections");
   // Must be registered to the colour frame: the boxes and keypoints are
-  // colour-image pixels. See the README.
+  // colour-image pixels. See docs/plausibility.md.
   const std::string depth_topic =
       declare_parameter<std::string>("depth_topic", "/camera/camera/aligned_depth_to_color/image_raw");
   const std::string camera_info_topic =
@@ -102,7 +102,7 @@ PeopleEstimationNode::PeopleEstimationNode(const rclcpp::NodeOptions& options)
 
   // ── Collaborators ─────────────────────────────────────────────────────────
   // Each declares its own parameters on this node, so they come after the block
-  // above. One per README section; see the class comment.
+  // above. One per stage in docs/; see the class comment.
   confirmer_ = std::make_unique<ConfirmationFilter>(*this);
   depth_reader_ = std::make_unique<DepthReader>(*this, depth_min_m_, depth_max_m_);
   plausibility_ = std::make_unique<PlausibilityFilter>(*this, depth_min_m_);
@@ -367,7 +367,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     const cv::Mat& depth_m, const riskam_msgs::msg::PersonDetection& detection, double stamp)
 {
   // A box that was not there before is not evidence of a person. Ahead of the
-  // depth read, so an unconfirmed detection costs nothing. See the README.
+  // depth read, so an unconfirmed detection costs nothing. See docs/confirmation.md.
   if (!confirmer_->confirmed(detection, stamp))
   {
     return std::nullopt;
@@ -392,7 +392,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     fy = camera_model_.fy();
   }
 
-  // A picture of a person is not a person. See the README.
+  // A picture of a person is not a person. See docs/plausibility.md.
   const Plausibility verdict = plausibility_->screen(depth_m, detection, depth.depth_m, stamp);
   if (!verdict.plausible)
   {
@@ -400,7 +400,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
     // the frames it took the filter to make up its mind is sitting in there as
     // somebody worth carrying forward, and coasting it would re-publish the
     // poster for coast_max_s after the filter rejected it. Unlike a dropout,
-    // this is not somebody who might still be there. See the README.
+    // this is not somebody who might still be there. See docs/coasting.md.
     coaster_->forget(detection.track_id);
     return std::nullopt;
   }
@@ -425,7 +425,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   person.position = tf2::toMsg(update.position);
   person.velocity = tf2::toMsg(update.fit.velocity);
   // This frame's depth and keypoints, but the filtered covariance: only the
-  // position is in doubt. See the README.
+  // position is in doubt. See docs/uncertainty.md.
   person.reliability = uncertainty_->reliability(depth, update.covariance, countValidKeypoints(detection));
 
   // people_msgs/Person has no field for the per-detection diagnostics, so
@@ -439,7 +439,7 @@ std::optional<people_msgs::msg::Person> PeopleEstimationNode::processDetection(
   if (publish_covariance_tags_)
   {
     // The velocity numbers ride along the same way, in this message's frame.
-    // See the README.
+    // See docs/uncertainty.md.
     const Eigen::Matrix3d velocity_covariance = update.fit.variance.asDiagonal();
     person.tagnames.insert(person.tagnames.end(),
                            { "position_covariance", "velocity_covariance", "n_history_samples", "velocity_window_s" });

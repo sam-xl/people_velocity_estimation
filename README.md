@@ -83,78 +83,16 @@ throttled "Could not transform" warning. Nothing is published until `camera_info
 
 ### Testing without a robot
 
-`scripts/dummy_tf.py` fills in whichever part of the TF chain is missing, so the node can be
-exercised with no localisation stack and no robot:
+`scripts/dummy_tf.py` fills in whichever part of the TF chain is missing, and
+`scripts/bag_camera_shim.py` publishes a stand-in colour `camera_info` for replays that lack one:
 
 ```bash
 ros2 run people_velocity_estimation dummy_tf.py               # map -> odom -> base_link -> camera
-ros2 launch people_velocity_estimation people_estimation.launch debug:=true
-```
-
-#### Which invocation
-
-The choice is driven by how much of the tree something else already owns. Publishing a
-transform that is already owned gives its child frame two parents, which tf2 resolves by
-silently keeping whichever arrived last — so err towards publishing less.
-
-| Situation | Command |
-|---|---|
-| No robot and no replay — pure bench | `dummy_tf.py` |
-| Replay carrying only the camera | `dummy_tf.py` |
-| Real robot, or a replay with a full tree **including localisation** | `dummy_tf.py --camera-only` |
-| Real robot or replay with odometry but **no localisation** | `dummy_tf.py --camera-only --static-odom` |
-
-`--camera-only` publishes the camera mount alone — one transform, unless `--static-odom` below adds
-the second — for when the robot's own TF comes from a bag replay or a live robot. Publishing the rest on top of one is actively harmful — `base_link`,
-`chassis_link` and `mid_mount` all end up with two parents, and wall-clock stamps against an
-older recording fall outside tf2's cache window. The script's docstring spells this out.
-
-`--static-base` pins the base at the origin instead. That makes hand-computed checks easy, but
-it zeroes **both** velocity-compensation terms, so it is not a test of the velocity path.
-
-`--static-odom` adds that identity `map -> odom` back under `--camera-only`, restoring the target
-frame without touching the odometry or the structure below it. Reach for it rather than
-`--static-base`, which pins `odom -> base_link` and would make this a second publisher of an
-edge the robot already broadcasts — the pose then flips between the two every few
-milliseconds.
-
-`map -> odom` is the one transform here that is never integrated from `/cmd_vel`, in either
-mode. It is the localisation *correction*, and the robot's own odometry already carries the
-motion in `odom -> base_link` — driving it from `/cmd_vel` too would move the base twice as
-far and turn it twice as fast in `map`, and double `v_base` in the velocity compensation with
-it.
-
-Check the tree with `ros2 run tf2_ros tf2_echo map camera_color_optical_frame` — the rotation
-matrix should read `[[0,0,1],[-1,0,0],[0,-1,0]]`, optical z (forward) onto base x (forward).
-
-#### Exercising the velocity compensation
-
-```bash
-ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist '{linear: {x: 0.5}, angular: {z: 0.3}}'
-```
-
-A person with zero velocity *relative to the camera* is not standing still: with the base
-driving they are carried along with it, so a correct cyan arrow in `map` is non-zero and
-roughly parallel to the magenta robot arrow. Zero map velocity there means the compensation
-is not being applied.
-
-The sharpest check is a person genuinely motionless in the world: project a fixed map-frame
-point into the optical frame using live TF and difference it between frames. Everything the
-node receives then changes every frame while the correct answer is constant. At 0.5 m/s and
-0.3 rad/s with the person 4.5 m out that gave 0.0000 m max position error and 0.0050 m/s max
-residual speed — differencing noise, not bias. A residual that grows with *range* means
-`ω × r` is wrong; one proportional to *speed* points at `v_base` or `robot_base_frame`.
-
-A replay that carries the colour images but not their `camera_info` publishes nothing.
-`bag_camera_shim.py` publishes a stand-in colour `camera_info`, paced by the depth stream:
-
-```bash
 ros2 run people_velocity_estimation bag_camera_shim.py
 ```
 
-Pass `--color-intrinsics fx fy cx cy` when the real calibration is known — the defaults are
-nominal D435i intrinsics at 640x480, which are close enough to see the pipeline work and not
-close enough to trust a number from. Both scripts take `--help`.
+Which `dummy_tf.py` flags suit a real robot or a replay, and how to check the velocity
+compensation, are in [Bench tooling](./docs/bench_tooling.md).
 
 > The scripts in `scripts/` need their executable bit (`chmod +x`) — `--symlink-install`
 > links straight to the source file, and `ros2 run` will not find them otherwise.
@@ -217,7 +155,7 @@ which documents every parameter inline.
 Other than the brief introduction in this page, you can also check the detailed documentation
 [here](./docs/index.md): confirmation, depth read-out, plausibility and spike filtering, the
 adaptive-window velocity fit, the map transform and motion compensation, coasting, the
-uncertainty model and the debug visualisation.
+uncertainty model, the debug visualisation and the bench tooling.
 
 ## Bugs & Feature Requests
 

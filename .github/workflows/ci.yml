@@ -57,7 +57,7 @@ jobs:
       - uses: sam-xl/industrial_ci@rosdep_fix_and_recent_clang_versions
         env:
           ROS_DISTRO: jazzy
-          ROS_REPO: main
+          DOCKER_IMAGE: ros:jazzy
           # riskam_msgs and people_msgs are source dependencies rosdep cannot resolve;
           # the rest of risk-awareness-module is dropped as its pip-only rosdep keys fail under PEP 668
           UPSTREAM_WORKSPACE: >-

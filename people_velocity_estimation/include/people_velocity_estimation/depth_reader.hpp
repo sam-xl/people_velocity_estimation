@@ -23,7 +23,7 @@ namespace people_velocity_estimation
 {
 
 /// Pixel the depth is attributed to: hip midpoint when available, else the bbox
-/// centre. See the README.
+/// centre. See docs/depth_readout.md.
 cv::Point2d anchorPixel(const riskam_msgs::msg::PersonDetection& detection);
 
 /// Result of reading depth for one detection.
@@ -42,7 +42,7 @@ struct DepthEstimate
 ///
 /// Median of small patches around the torso keypoints (shoulders + hips), so the
 /// reading comes off the body. Falls back to a low percentile over the whole
-/// bounding box when no torso keypoint carries depth. See the README.
+/// bounding box when no torso keypoint carries depth. See docs/depth_readout.md.
 ///
 /// Not a node: it declares its parameters on the owning node. The valid-depth
 /// band is passed in rather than declared here, because the node and the

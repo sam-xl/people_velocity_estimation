@@ -142,7 +142,7 @@ DepthEstimate DepthReader::read(const cv::Mat& depth_m, const riskam_msgs::msg::
   }
 
   // Low percentile = "closest valid surface in this box", which is the person
-  // rather than the wall behind them. See the README.
+  // rather than the wall behind them. See docs/depth_readout.md.
   const double low = percentile(valid, depth_percentile_);
   const double median = percentile(valid, 50.0);
   return DepthEstimate{ low, std::max(0.0, median - low),

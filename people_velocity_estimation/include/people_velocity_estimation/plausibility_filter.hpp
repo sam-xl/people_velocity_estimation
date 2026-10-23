@@ -36,8 +36,8 @@ struct Plausibility
 /// Rejects detections of people who are not there: posters, screens, banners.
 ///
 /// A body has a scene behind its head; a printed one *is* the scene. The test is
-/// hysteretic, so a single bad frame cannot blink a real person out. See the
-/// README.
+/// hysteretic, so a single bad frame cannot blink a real person out. See
+/// docs/plausibility.md.
 ///
 /// Not a node: it declares its parameters on the owning node and logs through
 /// it. The valid-depth floor is passed in, because the node and the depth
@@ -57,7 +57,7 @@ public:
 
 private:
   /// How many consecutive frames a track has failed the gate. Aged out on its own
-  /// timeout, separate from the tracker's. See the README.
+  /// timeout, separate from the tracker's. See docs/plausibility.md.
   struct State
   {
     std::size_t reject_streak{ 0 };

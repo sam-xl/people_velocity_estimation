@@ -28,7 +28,7 @@ namespace people_velocity_estimation
 ///
 /// Turns the pixel and depth noise into a position covariance, and folds that
 /// together with the depth read-out's own quality into the single scalar nav2's
-/// social layer consumes. See the README.
+/// social layer consumes. See docs/uncertainty.md.
 ///
 /// Not a node: it declares its parameters on the owning node.
 class UncertaintyModel
@@ -40,7 +40,7 @@ public:
   Eigen::Matrix3d positionCovariance(const cv::Point3d& ray, const DepthEstimate& depth, double bbox_width,
                                      double bbox_height, double fx, double fy) const;
 
-  /// Presence and localisation confidence for nav2's social layer; see the README.
+  /// Presence and localisation confidence for nav2's social layer; see docs/uncertainty.md.
   double reliability(const DepthEstimate& depth, const Eigen::Matrix3d& covariance,
                      std::size_t n_valid_keypoints) const;
 

@@ -132,7 +132,7 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
 
   // This reading is not a successor of the stored one, so every sample in front of
   // it is the history of somewhere else: differentiating across the discontinuity
-  // would report the discontinuity itself as motion. See the README.
+  // would report the discontinuity itself as motion. See docs/velocity_adaptive_window.md.
   const auto reseed = [&](Track& state) {
     state.history.clear();
     state.last_fit = priorFit();
@@ -180,7 +180,7 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
   // the far end of the depth band clears max_person_speed on its own.
   const Eigen::Vector3d previous = yawRotation(cumulative_yaw - state.cumulative_yaw) * state.position;
   const double speed = (position - previous).norm() / dt;
-  // Flat bound on what is left once the robot's own rotation is out. See the README.
+  // Flat bound on what is left once the robot's own rotation is out. See docs/position_spike_filtering.md.
   if (speed <= max_person_speed_)
   {
     return accept(state);
@@ -201,7 +201,7 @@ PersonTracker::FilteredPosition PersonTracker::filterPosition(std::int32_t track
   RCLCPP_DEBUG(node_.get_logger(), "Holding track %d at its previous position (%.1f m/s implied, hold %zu)", track_id,
                speed, state.consecutive_holds);
   // The stored covariance, not this frame's: the measured one is centred on the
-  // reading just rejected. See the README.
+  // reading just rejected. See docs/position_spike_filtering.md.
   return FilteredPosition::held(state.position, state.covariance, state.consecutive_holds);
 }
 
@@ -215,7 +215,7 @@ VelocityFit PersonTracker::priorFit() const
 PersonTracker::AdaptiveFit PersonTracker::fitAdaptive(const std::deque<Sample>& history) const
 {
   AdaptiveFit result;
-  // Below a minimum baseline there is no velocity worth reporting; see the README.
+  // Below a minimum baseline there is no velocity worth reporting; see docs/velocity_adaptive_window.md.
   if (history.size() < kMinFitSamples || (history.back().stamp - history.front().stamp) < velocity_min_span_s_)
   {
     result.fit = priorFit();
@@ -229,7 +229,7 @@ PersonTracker::AdaptiveFit PersonTracker::fitAdaptive(const std::deque<Sample>& 
   result.fit = fitVelocity(window);
 
   // Under the noise floor there is no direction, only the residual wobble of a
-  // person standing still. See the README.
+  // person standing still. See docs/velocity_adaptive_window.md.
   if (result.fit.velocity.norm() < velocity_epsilon_)
   {
     result.fit.velocity.setZero();
@@ -241,7 +241,7 @@ std::size_t PersonTracker::selectWindow(const std::deque<Sample>& history) const
 {
   // Judged on de-rotated samples but fitted on the raw ones, so that a robot turn
   // neither collapses the window nor moves the published, body-fixed value.
-  // See the README.
+  // See docs/velocity_adaptive_window.md.
   const std::deque<Sample> judged = derotate(history);
 
   std::size_t n = history.size();
@@ -265,7 +265,7 @@ std::size_t PersonTracker::selectWindow(const std::deque<Sample>& history) const
 double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const VelocityFit& fit) const
 {
   // Reduced chi-square of the constant-velocity model, per axis and worst of the
-  // three: a pooled statistic buries a one-axis manoeuvre. See the README.
+  // three: a pooled statistic buries a one-axis manoeuvre. See docs/velocity_adaptive_window.md.
 
   // Zero reads as "consistent", which is the right answer here: with no degree
   // of freedom left there is nothing to test, so the window must not shorten.
@@ -281,7 +281,7 @@ double PersonTracker::windowChiSquare(const std::deque<Sample>& window, const Ve
 
   // Residuals are judged against repeatability rather than the localisation
   // uncertainty the uncertainty model reports, with gait as the floor under it.
-  // See the README.
+  // See docs/velocity_adaptive_window.md.
   const double gait_var = velocity_gait_sigma_m_ * velocity_gait_sigma_m_;
   const double sigma_scale_sq = velocity_window_sigma_scale_ * velocity_window_sigma_scale_;
   Eigen::MatrixX3d variance(window.size(), 3);
@@ -306,7 +306,7 @@ std::deque<PersonTracker::Sample> PersonTracker::derotate(const std::deque<Sampl
   {
     const Eigen::Matrix3d rotation = yawRotation(yaw_now - sample.cumulative_yaw);
     sample.position = rotation * sample.position;
-    // The uncertainty turns with the point. See the README.
+    // The uncertainty turns with the point. See docs/velocity_adaptive_window.md.
     sample.covariance = rotation * sample.covariance * rotation.transpose();
   }
   return rotated;

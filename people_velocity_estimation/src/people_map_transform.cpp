@@ -70,7 +70,7 @@ bool PeopleMapTransform::transform(people_msgs::msg::People& people,
     // Nothing is re-framed here, so what the caller appends afterwards is in the
     // same frame as everything else by construction — the sensor frame, which
     // moves with the robot. Coasting is only world-fixed when `target_frame` is
-    // set; see the README.
+    // set; see docs/coasting.md.
     return true;
   }
 
@@ -131,7 +131,7 @@ bool PeopleMapTransform::transform(people_msgs::msg::People& people,
     const Eigen::Vector3d v_world = velocity_in_target + motion.linear + motion.angular.cross(lever);
 
     // name, reliability, tagnames and tags carry through untouched; the
-    // covariance tags stay in the frame they were measured in. See the README.
+    // covariance tags stay in the frame they were measured in. See docs/uncertainty.md.
     person.position = tf2::toMsg(position_in_target);
     person.velocity = tf2::toMsg(v_world);
   }

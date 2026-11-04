@@ -21,3 +21,7 @@ is *chosen* de-rotated but *fitted* body-fixed. Two limits: `cmd_vel` is what th
 on arrival and anything older than `cmd_vel_timeout` counts as stationary.
 
 Every degraded path logs a warning throttled to 5s.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

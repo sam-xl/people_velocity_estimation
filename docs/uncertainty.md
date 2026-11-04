@@ -25,3 +25,7 @@ localisation term from the covariance trace. Velocity confidence is excluded, si
 ill-determined velocity does not make the person less present. While a position is held,
 `reliability` combines *this* frame's depth validity and keypoint count with the *held*
 covariance: the detector did see a body this frame, so only the position is in doubt.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

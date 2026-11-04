@@ -58,3 +58,7 @@ a new or re-seeded track reports zero with `velocity_prior_variance`. While the 
 holds a position the last fitted velocity is republished with it — zero would assert the person
 stopped, which a rejected reading is no evidence of; held frames never enter the history, and a
 re-seed clears it rather than differentiating across the discontinuity.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

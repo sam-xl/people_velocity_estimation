@@ -16,3 +16,7 @@ resurrected by a frame with no usable depth.
 Do not go back to a single pixel at the box centre with a zero/NaN check, as `riskam_node` once
 did: a sample landing on background is a perfectly valid number, and it placed people metres too
 far away.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

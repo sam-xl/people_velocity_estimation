@@ -33,3 +33,7 @@ at the edge of frame they were last seen crossing. **A coasted person is labelle
 `coast_s` and `coast_position_sigma_m` attached regardless of `publish_covariance_tags`, and
 `reliability` scaled down linearly to zero at `coast_max_s` so they fade out of the social layer
 rather than blinking out of it. `0` disables coasting entirely.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

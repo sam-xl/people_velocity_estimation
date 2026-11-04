@@ -14,7 +14,7 @@ re-recording:
 
 That CameraInfo is the only thing published. Depth is consumed exactly as it
 arrives, on the assumption that it is already registered to the colour frame --
-see the README on why an unregistered depth stream fails this pipeline silently.
+see docs/plausibility.md on why an unregistered depth stream fails this pipeline silently.
 
 The default intrinsics are nominal D435i values for 640x480 (derived from the
 sensor FOVs, and matching what these cameras typically report), scaled if the

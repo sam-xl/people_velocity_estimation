@@ -32,3 +32,7 @@ publisher nor the broadcaster is created.
   should point where the robot is actually driving.
 - **A stationary person's green arrow grows as the robot turns** → `ω × r` is wrong, and the
   error scales with range.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

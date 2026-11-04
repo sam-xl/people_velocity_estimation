@@ -35,7 +35,7 @@ namespace people_velocity_estimation
 /// next frame and nav2 plans straight through where they are. That is the
 /// failure this class exists to prevent: it carries a track forward on its last
 /// known velocity until either the detector finds it again or `coast_max_s` runs
-/// out. See the README.
+/// out. See docs/coasting.md.
 ///
 /// **Only somebody the camera can no longer see.** A track whose extrapolated
 /// position is still inside the image is dropped instead, because the camera
@@ -68,7 +68,7 @@ public:
   /// detector found nobody, and withholding would republish the ghost as soon as the
   /// robot turned away. `in_view` is empty only when TF could not say where the
   /// camera points, which runs coasting ungated rather than dropping everybody.
-  /// See the README.
+  /// See docs/coasting.md.
   ///
   /// The result is already in `target_frame`, so it is appended to the outgoing
   /// message rather than transformed with it.
@@ -87,8 +87,8 @@ public:
   /// Stop coasting this track immediately, dropping whatever was remembered of
   /// it. For the case where a detection *did* arrive and was rejected as not
   /// being a person at all — coasting answers "where would they be by now",
-  /// which is the wrong question about something that was never there. See the
-  /// README.
+  /// which is the wrong question about something that was never there. See
+  /// docs/coasting.md.
   void forget(std::int32_t track_id);
 
   /// Forget tracks past the horizon, so churning ids cannot grow the map.

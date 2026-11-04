@@ -27,3 +27,7 @@ the streak for the frames around it to carry — clearing it there would let a b
 intermittently clips the frame edge never reach the patience at all; an untracked detection has
 no identity to accumulate a streak against and is judged on one frame; and a real person standing
 flat against a wall is suppressed, with `background_step_m` buying about a body's depth of margin.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

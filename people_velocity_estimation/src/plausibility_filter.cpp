@@ -79,7 +79,7 @@ Plausibility PlausibilityFilter::screen(const cv::Mat& depth_m, const riskam_msg
   }
 
   ++state.reject_streak;
-  // Hysteresis: only a track that keeps failing is suppressed. See the README.
+  // Hysteresis: only a track that keeps failing is suppressed. See docs/plausibility.md.
   if (state.reject_streak <= implausible_patience_)
   {
     verdict.plausible = true;
@@ -118,7 +118,7 @@ Plausibility PlausibilityFilter::backgroundFraction(const cv::Mat& depth_m,
   const cv::Rect strip = cv::Rect(bbox.x, bbox.y, bbox.width, strip_rows) & bbox;
 
   // Behind the person: past them by more than a body's depth, or no return at all.
-  // Deliberately not clipped to depth_max_m. See the README. NaN fails both
+  // Deliberately not clipped to depth_max_m. See docs/plausibility.md. NaN fails both
   // range comparisons, so it lands on the "behind" side with the dropouts.
   const double far_threshold = depth_z + background_step_m_;
   // Compared in double: inRange would otherwise round the bounds to float.
@@ -136,7 +136,7 @@ Plausibility PlausibilityFilter::backgroundFraction(const cv::Mat& depth_m,
 
 void PlausibilityFilter::dropStale(double now)
 {
-  // Its own timeout, longer than the spike filter's; see the README. Absolute
+  // Its own timeout, longer than the spike filter's; see docs/plausibility.md. Absolute
   // value because a looping bag walks the clock backwards.
   for (auto it = states_.begin(); it != states_.end();)
   {

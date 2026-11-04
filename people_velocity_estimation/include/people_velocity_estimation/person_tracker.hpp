@@ -63,7 +63,7 @@ struct TrackUpdate
 ///
 /// Two jobs that cannot be separated: a reading implying an impossible speed is
 /// rejected as a depth error, and rejecting it is also what keeps it out of the
-/// history the velocity is differentiated from. See the README.
+/// history the velocity is differentiated from. See docs/position_spike_filtering.md.
 ///
 /// Not a node: it declares its parameters on the owning node and logs through it.
 /// The camera's own yaw is passed in rather than integrated here, because the

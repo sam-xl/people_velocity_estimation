@@ -67,7 +67,7 @@ Eigen::Matrix3d UncertaintyModel::positionCovariance(const cv::Point3d& ray, con
 double UncertaintyModel::reliability(const DepthEstimate& depth, const Eigen::Matrix3d& covariance,
                                      std::size_t n_valid_keypoints) const
 {
-  // Presence and localisation, deliberately not velocity confidence. See the README.
+  // Presence and localisation, deliberately not velocity confidence. See docs/uncertainty.md.
   const double r_valid =
       std::clamp(depth.valid_frac / std::max(kDenominatorFloor, reliability_valid_frac_full_), 0.0, 1.0);
   const double r_keypoints = std::clamp(

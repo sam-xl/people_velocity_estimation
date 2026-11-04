@@ -47,3 +47,7 @@ script publishes a stand-in colour `camera_info`, paced by the depth stream. Pas
 `--color-intrinsics fx fy cx cy` when the real calibration is known: the defaults are nominal
 D435i intrinsics at 640x480, close enough to see the pipeline work but not to trust a number
 from.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

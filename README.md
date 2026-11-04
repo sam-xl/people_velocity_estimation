@@ -15,7 +15,8 @@ Input is [`riskam_msgs/PersonDetections`](https://github.com/sam-xl/risk-awarene
 from [RiskAM](https://github.com/sam-xl/risk-awareness-module)'s
 `riskam_node`: bounding boxes, ByteTrack ids and COCO-17 keypoints only. Everything metric
 happens here, so the depth policy can change without touching RiskAM or the interface between
-them.
+them. *Any other detections provider can be used as long as it conforms to the interface
+specified here.*
 
 Everything metric is measured in the **colour camera's optical frame** and re-framed into
 `target_frame` (`map` by default) on the way out, so `/people` is world-fixed and ready for
@@ -161,3 +162,7 @@ uncertainty model, the debug visualisation and the bench tooling.
 
 Please report bugs and request features using the
 [Issue Tracker](https://github.com/sam-xl/people_velocity_estimation/issues).
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

@@ -152,3 +152,7 @@ importance: each one depends on the ones above it holding up.
 
 For exercising the node with no robot or localisation stack, see
 [Bench tooling](bench_tooling.md).
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

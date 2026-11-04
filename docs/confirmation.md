@@ -21,3 +21,7 @@ Two knock-on effects, both accepted: a new person's velocity history starts `con
 frames late, and a poster's `implausible_patience` frames begin only once it has confirmed.
 `riskam_msgs/PersonDetection` carries no confidence field, so the streak cannot be weighted by
 how sure the detector was.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

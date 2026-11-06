@@ -5,7 +5,7 @@ from typing import NamedTuple
 
 import numpy as np
 import pytest
-from conftest import NODE, TIMEOUT_S, people_estimation, wait_until
+from conftest import NODE, TIMEOUT_S, node_parameters, people_estimation, wait_until
 from cv_bridge import CvBridge
 from people_msgs.msg import People
 from rclpy.duration import Duration
@@ -36,11 +36,17 @@ def pixel(x, y, z):
 
 
 class Sighting(NamedTuple):
-    """Somebody standing upright at (x, 0, z) in the camera frame, 0.5 m wide, 1.2 m tall."""
+    """
+    Somebody standing upright at (x, 0, z) in the camera frame, 0.5 m wide, 1.2 m tall.
+
+    ``hip_dx`` moves the hips sideways from the box centre, so the two anchors tell apart.
+    """
 
     track_id: int
     x: float
     z: float
+    torso_keypoints: bool = True
+    hip_dx: float = 0.0
 
 
 def detection(sighting):
@@ -48,13 +54,12 @@ def detection(sighting):
     left, top = pixel(x - 0.25, -0.6, z)
     right, bottom = pixel(x + 0.25, 0.6, z)
     keypoints = [0.0] * 34
-    placed = {
-        NOSE: (x, -0.5),
-        LEFT_SHOULDER: (x + 0.15, -0.2),
-        RIGHT_SHOULDER: (x - 0.15, -0.2),
-        LEFT_HIP: (x + 0.1, 0.1),
-        RIGHT_HIP: (x - 0.1, 0.1),
-    }
+    placed = {NOSE: (x, -0.5)}
+    if sighting.torso_keypoints:
+        placed[LEFT_SHOULDER] = (x + 0.15, -0.2)
+        placed[RIGHT_SHOULDER] = (x - 0.15, -0.2)
+        placed[LEFT_HIP] = (x + sighting.hip_dx + 0.1, 0.1)
+        placed[RIGHT_HIP] = (x + sighting.hip_dx - 0.1, 0.1)
     for k, (kx, ky) in placed.items():
         keypoints[2 * k : 2 * k + 2] = pixel(kx, ky, z)
     bbox = [round(left), round(top), round(right), round(bottom)]
@@ -192,3 +197,25 @@ def test_walking_person_is_published_at_their_speed(run):
         # From the fifth frame the history spans more than velocity_min_span_s.
         if i >= 4:
             assert person.velocity.x == pytest.approx(1.0, abs=0.05), f"frame {i}"
+
+
+def test_position_comes_from_hip_midpoint_else_bounding_box(run):
+    rig = run()
+    [hips] = rig.publish_and_receive(1.0, [(7, 0.0, 2.0, True, 0.1)]).people
+    assert xyz(hips.position) == pytest.approx([0.1, 0.1, 2.0], abs=TOLERANCE)
+    [box] = rig.publish_and_receive(2.0, [(8, 0.3, 2.0, False)]).people
+    assert xyz(box.position) == pytest.approx([0.3, 0.0, 2.0], abs=TOLERANCE)
+
+
+@node_parameters(confirm_frames=3)
+def test_track_is_published_only_after_confirm_frames(run):
+    rig = run()
+    for i in (1, 2, 3):
+        people = rig.publish_and_receive(0.1 * i, [(7, -0.5, 2.0), (-1, 0.5, 2.0)])
+        names = [person.name for person in people.people]
+        assert names == (["person_7"] if i == 3 else []), f"frame {i}"
+
+
+def test_untracked_detection_is_published_while_confirmation_is_off(run):
+    people = run().publish_and_receive(1.0, [(-1, 0.0, 2.0)])
+    assert [person.name for person in people.people] == ["person_untracked_0"]

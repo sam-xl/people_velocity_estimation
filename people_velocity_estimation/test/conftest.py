@@ -31,6 +31,11 @@ def wait_until(done, timeout_s=TIMEOUT_S):
     return True
 
 
+def node_parameters(**overrides):
+    """Run the decorated test with ``overrides`` on top of ``TEST_PARAMETERS``."""
+    return pytest.mark.parametrize("people_estimation", [overrides], indirect=True)
+
+
 @pytest.fixture
 def node_absent(test_node):
     """

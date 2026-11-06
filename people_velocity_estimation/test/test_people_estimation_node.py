@@ -119,6 +119,10 @@ def vector3(array):
     return Vector3(x=array[0], y=array[1], z=array[2])
 
 
+def tags(person):
+    return dict(zip(person.tagnames, person.tags, strict=True))
+
+
 class Rig:
     """Plays the camera, the detector, the robot and nav2 around the node."""
 
@@ -391,3 +395,40 @@ def test_track_is_published_only_after_confirm_frames(run):
 def test_untracked_detection_is_published_while_confirmation_is_off(run):
     people = run().publish_and_receive(1.0, [(-1, 0.0, 2.0)])
     assert [person.name for person in people.people] == ["person_untracked_0"]
+
+
+def test_depth_spike_holds_the_previous_position(run):
+    rig = run()
+    for i in range(5):
+        [person] = rig.publish_and_receive(1.0 + 0.1 * i, [(7, -0.5 + 0.1 * i, 2.0)]).people
+    # 0.5 m deeper in 0.1 s is faster than max_person_speed.
+    [held] = rig.publish_and_receive(1.5, [(7, 0.0, 2.0)], paint_z=2.5).people
+    assert tags(held)["position_hold_frames"] == "1"
+    assert xyz(held.position) == xyz(person.position)
+
+
+VELOCITY_WINDOW_MAX_S = 2.0
+
+
+@node_parameters(publish_covariance_tags=True, velocity_window_max_s=VELOCITY_WINDOW_MAX_S)
+def test_reversal_shortens_the_velocity_window(run):
+    frame_period_s, walking_speed = 0.1, 1.0
+    step_m = walking_speed * frame_period_s
+    rig = run()
+
+    def walk(i, x):
+        # From -1 m to 1 m at 2.5 m the box stays inside the image.
+        [person] = rig.publish_and_receive(1.0 + frame_period_s * i, [(7, x, 2.5)]).people
+        return person, float(tags(person)["velocity_window_s"])
+
+    for i in range(21):
+        person, window_s = walk(i, -1.0 + step_m * i)
+    # The sample exactly velocity_window_max_s old is kept or dropped depending on
+    # float rounding, so allow up to one frame short, but not two.
+    assert window_s > VELOCITY_WINDOW_MAX_S - 1.5 * frame_period_s
+    assert person.velocity.x == pytest.approx(walking_speed, abs=0.05)
+
+    for back in range(1, 6):
+        person, window_s = walk(20 + back, 1.0 - step_m * back)
+    assert window_s < 1.0
+    assert person.velocity.x < 0.0

@@ -11,3 +11,9 @@ repositories:
     type: git
     url: https://github.com/sam-xl/risk-awareness-module.git
     version: velocity_estimator
+
+  # Test fixtures, and the topic helpers the node tests use.
+  ros2_test_utils:
+    type: git
+    url: https://github.com/sam-xl/ros2_test_utils.git
+    version: feat/add-topic-support  # main once sam-xl/ros2_test_utils merges it

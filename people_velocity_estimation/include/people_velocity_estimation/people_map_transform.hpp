@@ -68,10 +68,6 @@ public:
   bool transform(people_msgs::msg::People& people, const std::optional<geometry_msgs::msg::Twist>& cmd_vel,
                  std::optional<RobotMotion>* motion_out = nullptr);
 
-  /// The reverse of what `transform()` applies: `target_frame` -> `frame`, at `stamp`.
-  /// Identity when `target_frame` is empty; false (already warned) when TF cannot answer.
-  ///
-  /// Public so callers reuse this class's TF buffer rather than adding a second listener.
   /// The frame published people end up in. Empty when the transform is off and
   /// they stay in the sensor's optical frame.
   const std::string& targetFrame() const
@@ -79,6 +75,10 @@ public:
     return target_frame_;
   }
 
+  /// The reverse of what `transform()` applies: `target_frame` -> `frame`, at `stamp`.
+  /// Identity when `target_frame` is empty; false (already warned) when TF cannot answer.
+  ///
+  /// Public so callers reuse this class's TF buffer rather than adding a second listener.
   bool lookupFromTarget(const std::string& frame, const rclcpp::Time& stamp,
                         geometry_msgs::msg::TransformStamped& transform);
 

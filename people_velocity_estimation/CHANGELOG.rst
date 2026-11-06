@@ -34,3 +34,4 @@ Changes:
 - Move CI to GitHub Actions
 - Add a component diagram and move the bench tooling docs to docs/
 - Add interface tests
+- Add tests for the pipeline stages and the tracker

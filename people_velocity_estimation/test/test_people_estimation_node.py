@@ -9,7 +9,9 @@ from conftest import NODE, TIMEOUT_S, node_parameters, people_estimation, wait_u
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Quaternion, TransformStamped, Twist, Vector3
 from people_msgs.msg import People
+from rcl_interfaces.msg import Log
 from rclpy.duration import Duration
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time
 from riskam_msgs.msg import PersonDetection, PersonDetections
 from scipy.spatial.transform import Rotation
@@ -127,6 +129,10 @@ class Rig:
         self.camera_info = make_test_publisher(CameraInfo, "test/camera_info")
         self.cmd_vel = make_test_publisher(Twist, "test/cmd_vel")
         self.people = make_test_subscriber(People, "test/people")
+        # Transient local, like the node's /rosout publisher, so a warning logged
+        # before the two connect still arrives.
+        rosout_qos = QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.rosout = make_test_subscriber(Log, "/rosout", qos_profile=rosout_qos)
         self.tf = StaticTransformBroadcaster(test_node)
 
     @staticmethod
@@ -190,6 +196,12 @@ class Rig:
             lambda m: m.header.stamp == stamp(seconds), FRAME_TIMEOUT_S
         )
 
+    def wait_for_log(self, text):
+        """Wait until the node logs a message containing ``text``."""
+        self.rosout.wait_for_message(
+            lambda log: log.name == NODE and text in log.msg, FRAME_TIMEOUT_S
+        )
+
 
 @pytest.fixture
 def run(test_node, make_test_publisher, make_test_subscriber):
@@ -231,6 +243,96 @@ def test_frame_without_detections_publishes_an_empty_people(run):
     people = run().publish_and_receive(1.0, [])
     assert people.people == []
     assert people.header.frame_id == CAMERA_FRAME
+
+
+## Inputs that must result in failure to publish
+# Each case breaks either the node's setup (its parameters, or the rig's ``setup``)
+# or its first frame, then checks that a normal frame still gets through. The broken
+# frame comes out as ``published``: None when the node drops it, [] when it publishes
+# nobody. A drop shows up as the warning ``logged`` on /rosout, so the test need not
+# wait out FRAME_TIMEOUT_S to see it. A broken setup gets fixed by ``repair`` before
+# the normal frame; a broken frame needs no repair, since the normal frame is sent
+# without its options.
+@pytest.mark.parametrize(
+    ("people_estimation", "setup", "frame_options", "published", "logged", "repair"),
+    [
+        pytest.param(
+            {},
+            {"send_camera_info": False},
+            {},
+            None,
+            "No camera_info received yet",
+            lambda rig: rig.send_camera_info(FX),
+            id="no_camera_info",
+        ),
+        pytest.param(
+            {},
+            {"fx": 0.0},
+            {},
+            None,
+            "No camera_info received yet",
+            lambda rig: rig.send_camera_info(FX),
+            id="zero_focal_length",
+        ),
+        pytest.param(
+            {},
+            {},
+            {"encoding": "bgr8"},
+            None,
+            "Unsupported depth encoding",
+            None,
+            id="unsupported_encoding",
+        ),
+        pytest.param(
+            {}, {}, {"depth_offset_s": 0.5}, None, None, None, id="depth_outside_sync_slop"
+        ),
+        pytest.param({}, {}, {"paint_z": 3.5}, [], None, None, id="depth_out_of_band"),
+        pytest.param(
+            {"target_frame": "map", "transform_timeout": 0.05},
+            {},
+            {},
+            None,
+            "Could not transform",
+            Rig.send_robot_tf,
+            id="missing_tf",
+        ),
+        pytest.param(
+            {
+                "target_frame": "map",
+                "transform_timeout": 0.5,
+                "require_cmd_vel": True,
+                # Off, so the repair's cmd_vel cannot go stale before the next frame.
+                "cmd_vel_timeout": 0.0,
+            },
+            {"robot_tf": True},
+            {},
+            None,
+            "require_cmd_vel",
+            lambda rig: rig.send_cmd_vel(np.zeros(3), np.zeros(3)),
+            id="cmd_vel_required_but_missing",
+        ),
+    ],
+    indirect=["people_estimation"],
+)
+def test_inputs_that_publish_nobody(run, setup, frame_options, published, logged, repair):
+    rig = run(**setup)
+    if published is None:
+        rig.publish_frame(1.0, [(7, 0.0, 2.0)], **frame_options)
+        # Check now before the repair, which could otherwise reach the node ahead of the frame.
+        if logged:
+            rig.wait_for_log(logged)
+    else:
+        assert rig.publish_and_receive(1.0, [(7, 0.0, 2.0)], **frame_options).people == published
+    if repair:
+        repair(rig)
+    # The same person once the fault is gone, so the node is alive and listening.
+    # More than one second later (2.0), out of sync_slop of the depth image left behind by e.g. the
+    # slop case.
+    people = rig.publish_and_receive(2.0, [(7, 0.0, 2.0)])
+    assert len(people.people) == 1
+    if published is None:
+        # The node publishes frames in order, so a published first frame would be here.
+        assert not rig.published(1.0)
 
 
 def test_walking_person_is_published_at_their_speed(run):

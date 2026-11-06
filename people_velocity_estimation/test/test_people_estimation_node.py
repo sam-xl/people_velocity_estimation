@@ -7,12 +7,15 @@ import numpy as np
 import pytest
 from conftest import NODE, TIMEOUT_S, node_parameters, people_estimation, wait_until
 from cv_bridge import CvBridge
+from geometry_msgs.msg import Quaternion, TransformStamped, Twist, Vector3
 from people_msgs.msg import People
 from rclpy.duration import Duration
 from rclpy.time import Time
 from riskam_msgs.msg import PersonDetection, PersonDetections
+from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Header
+from tf2_ros import StaticTransformBroadcaster
 
 WIDTH, HEIGHT = 640, 480
 FX, CX, CY = 500.0, 320.0, 240.0
@@ -29,6 +32,21 @@ NOSE, LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP = 0, 5, 6, 11, 12
 DIAGNOSTICS = ["depth_valid_frac", "depth_spread_m", "position_hold_frames", "background_frac"]
 
 pytestmark = pytest.mark.launch(fixture=people_estimation)
+
+# Robot at (1, 0, 0) in the map, facing +y; camera 1 m up and 0.2 m ahead, looking
+# forward (optical x right, y down, z ahead).
+MAP_TO_BASE_T = np.array([1.0, 0.0, 0.0])
+MAP_TO_BASE_Q = Quaternion(z=np.sqrt(0.5), w=np.sqrt(0.5))
+BASE_TO_CAMERA_T = np.array([0.2, 0.0, 1.0])
+BASE_TO_CAMERA_Q = Quaternion(x=-0.5, y=0.5, z=-0.5, w=0.5)
+
+
+def rotation_matrix(q):
+    return Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
+
+
+MAP_TO_BASE_R = rotation_matrix(MAP_TO_BASE_Q)
+BASE_TO_CAMERA_R = rotation_matrix(BASE_TO_CAMERA_Q)
 
 
 def pixel(x, y, z):
@@ -95,15 +113,21 @@ def xyz(vector):
     return [vector.x, vector.y, vector.z]
 
 
+def vector3(array):
+    return Vector3(x=array[0], y=array[1], z=array[2])
+
+
 class Rig:
-    """Plays the camera, the detector and nav2 around the node."""
+    """Plays the camera, the detector, the robot and nav2 around the node."""
 
     def __init__(self, test_node, make_test_publisher, make_test_subscriber):
         """Connect to the node's topics; the fixtures wait until each one matches."""
         self.detections = make_test_publisher(PersonDetections, "test/detections")
         self.depth = make_test_publisher(Image, "test/depth")
         self.camera_info = make_test_publisher(CameraInfo, "test/camera_info")
+        self.cmd_vel = make_test_publisher(Twist, "test/cmd_vel")
         self.people = make_test_subscriber(People, "test/people")
+        self.tf = StaticTransformBroadcaster(test_node)
 
     @staticmethod
     def send(publisher, message):
@@ -125,6 +149,24 @@ class Rig:
         info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         info.p = [fx, 0.0, CX, 0.0, 0.0, fx, CY, 0.0, 0.0, 0.0, 1.0, 0.0]
         self.send(self.camera_info, info)
+        time.sleep(0.1)
+
+    def send_cmd_vel(self, linear, angular):
+        self.send(self.cmd_vel, Twist(linear=vector3(linear), angular=vector3(angular)))
+        time.sleep(0.1)
+
+    def send_robot_tf(self):
+        transforms = []
+        for parent, child, translation, rotation in [
+            ("map", "base_link", MAP_TO_BASE_T, MAP_TO_BASE_Q),
+            ("base_link", CAMERA_FRAME, BASE_TO_CAMERA_T, BASE_TO_CAMERA_Q),
+        ]:
+            transform = TransformStamped(child_frame_id=child)
+            transform.header.frame_id = parent
+            transform.transform.translation = vector3(translation)
+            transform.transform.rotation = rotation
+            transforms.append(transform)
+        self.tf.sendTransform(transforms)
         time.sleep(0.1)
 
     def publish_frame(self, seconds, people, encoding="32FC1", depth_offset_s=0.0, paint_z=None):
@@ -153,11 +195,13 @@ class Rig:
 def run(test_node, make_test_publisher, make_test_subscriber):
     """Set up a rig around the launched node."""
 
-    def run(send_camera_info=True, fx=FX):
+    def run(send_camera_info=True, fx=FX, robot_tf=False):
         # Only once the node is up, so it discovers the rig's publishers as they are
         # created, not at their next heartbeat, which would delay the first send.
         assert wait_until(lambda: NODE in test_node.get_node_names()), f"{NODE} never came up"
         rig = Rig(test_node, make_test_publisher, make_test_subscriber)
+        if robot_tf:
+            rig.send_robot_tf()
         if send_camera_info:
             rig.send_camera_info(fx)
         return rig
@@ -197,6 +241,32 @@ def test_walking_person_is_published_at_their_speed(run):
         # From the fifth frame the history spans more than velocity_min_span_s.
         if i >= 4:
             assert person.velocity.x == pytest.approx(1.0, abs=0.05), f"frame {i}"
+
+
+@node_parameters(target_frame="map", transform_timeout=0.5, cmd_vel_timeout=0.0)
+def test_cmd_vel_and_tf_reframe_into_map(run):
+    rig = run(robot_tf=True)
+    cmd_linear, cmd_angular = np.array([0.5, 0.0, 0.0]), np.array([0.0, 0.0, 0.4])
+    rig.send_cmd_vel(cmd_linear, cmd_angular)
+
+    # Walking at 1 m/s along optical x, so the person has a velocity of their own.
+    for i in range(10):
+        person_x = -0.5 + 0.1 * i
+        people = rig.publish_and_receive(1.0 + 0.1 * i, [(7, person_x, 2.0)])
+    assert people.header.frame_id == "map"
+    [person] = people.people
+    # The hip midpoint, 0.1 m below the optical axis.
+    hips_in_camera = [person_x, 0.1, 2.0]
+    hips_in_base = BASE_TO_CAMERA_R @ hips_in_camera + BASE_TO_CAMERA_T
+    hips_in_map = MAP_TO_BASE_R @ hips_in_base + MAP_TO_BASE_T
+    walking_in_map = MAP_TO_BASE_R @ BASE_TO_CAMERA_R @ [1.0, 0.0, 0.0]
+    base_to_hips_in_map = hips_in_map - MAP_TO_BASE_T
+    robot_motion_at_hips = MAP_TO_BASE_R @ cmd_linear + np.cross(
+        MAP_TO_BASE_R @ cmd_angular, base_to_hips_in_map
+    )
+    assert xyz(person.position) == pytest.approx(hips_in_map.tolist(), abs=TOLERANCE)
+    expected_velocity = walking_in_map + robot_motion_at_hips
+    assert xyz(person.velocity) == pytest.approx(expected_velocity.tolist(), abs=0.05)
 
 
 def test_position_comes_from_hip_midpoint_else_bounding_box(run):

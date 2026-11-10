@@ -28,3 +28,7 @@ since the longer nothing has been believed, the further the person could have go
 covariance is deliberately not widened for staleness; with the bound set for outliers rather than
 for walking, the implied drift would swamp the trace and `reliability` would report the person as
 barely present.
+
+---
+
+*Portions of this document were formatted and edited with the assistance of Claude (Anthropic).*

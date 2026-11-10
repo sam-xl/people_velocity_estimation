@@ -32,7 +32,7 @@ namespace people_velocity_estimation
 /// Re-frames `people_msgs/People` from the sensor frame into a world-fixed frame.
 ///
 /// Positions go through the full TF transform; velocities are only rotated, then
-/// corrected for the robot's own motion. See the README.
+/// corrected for the robot's own motion. See docs/map_transform.md.
 ///
 /// Not a node: it declares its parameters on the owning node and logs through
 /// it, and takes `cmd_vel` as an argument since that node already latches it.

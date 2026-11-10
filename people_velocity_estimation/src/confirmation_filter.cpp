@@ -46,8 +46,8 @@ bool ConfirmationFilter::confirmed(const riskam_msgs::msg::PersonDetection& dete
 
   // ByteTrack reports every unassociated detection as -1, so they all share one
   // id and no streak can be kept per detection. Unassociated is also the state a
-  // one-frame phantom arrives in, so this is a rejection, not a pass. See the
-  // README.
+  // one-frame phantom arrives in, so this is a rejection, not a pass. See
+  // docs/confirmation.md.
   if (detection.track_id < 0)
   {
     RCLCPP_INFO_THROTTLE(node_.get_logger(), *node_.get_clock(), kWarnThrottleMs,

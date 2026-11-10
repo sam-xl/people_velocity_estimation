@@ -51,7 +51,7 @@ namespace people_velocity_estimation
 ///
 /// This class is the plumbing: it pairs detections with depth, decodes the depth
 /// image, latches `camera_info` and `cmd_vel`, and assembles the output message.
-/// The metric work is delegated, one collaborator per README section — see
+/// The metric work is delegated, one collaborator per stage in docs/ — see
 /// `DepthReader`, `PlausibilityFilter`, `UncertaintyModel`, `PersonTracker`, and
 /// finally `PeopleMapTransform`, which re-frames the result into `target_frame`.
 /// `DebugVisualizer` draws whatever comes out the far end.
@@ -115,7 +115,7 @@ private:
   /// Re-frames the output into `target_frame`. Owns the TF buffer and listener.
   std::unique_ptr<PeopleMapTransform> map_transform_;
   /// Runs after the map transform: works on the re-framed output, so a coasted
-  /// person is extrapolated in a world-fixed frame. See the README.
+  /// person is extrapolated in a world-fixed frame. See docs/coasting.md.
   std::unique_ptr<TrackCoaster> coaster_;
   /// Runs last, on the message that is about to be published.
   std::unique_ptr<DebugVisualizer> debug_;

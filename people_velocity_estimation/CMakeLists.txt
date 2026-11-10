@@ -82,6 +82,10 @@ install(PROGRAMS scripts/bag_camera_shim.py scripts/dummy_tf.py DESTINATION lib/
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME}/)
 
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
+
 ament_export_include_directories(include)
 ament_export_targets(export_${PROJECT_NAME})
 ament_export_dependencies(

@@ -39,6 +39,13 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>tf2_ros_py</exec_depend>
 
+  <test_depend>ament_cmake_ros</test_depend>
+  <test_depend>launch_pytest</test_depend>
+  <test_depend>python3-numpy</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <test_depend>ros2_test_utils</test_depend>
+  <test_depend>std_msgs</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

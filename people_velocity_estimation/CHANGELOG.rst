@@ -33,4 +33,4 @@ Changes:
 - Rename the package to people_velocity_estimation
 - Move CI to GitHub Actions
 - Add a component diagram and move the bench tooling docs to docs/
-- Add interface tests
+- Add interface tests that drive the node with a mocked camera and detector

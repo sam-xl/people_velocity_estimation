@@ -50,6 +50,7 @@ class Sighting(NamedTuple):
 
 
 def detection(sighting):
+    """Mock the detector's PersonDetection of ``sighting``."""
     x, z = sighting.x, sighting.z
     left, top = pixel(x - 0.25, -0.6, z)
     right, bottom = pixel(x + 0.25, 0.6, z)
@@ -67,7 +68,7 @@ def detection(sighting):
 
 
 def depth_image(detections, depths_m, header, encoding):
-    """Paint each detection's box at its depth, over the background."""
+    """Mock the depth image: paint each detection's box at its depth, over the background."""
     depth_m = np.full((HEIGHT, WIDTH), BACKGROUND_M, dtype=np.float32)
     for person, z in zip(detections, depths_m, strict=True):
         left, top, right, bottom = person.bbox
@@ -96,7 +97,7 @@ def xyz(vector):
 
 
 class Rig:
-    """Plays the camera, the detector and nav2 around the node."""
+    """Mocks the camera and the detector around the node."""
 
     def __init__(self, test_node, make_test_publisher, make_test_subscriber):
         """Connect to the node's topics; the fixtures wait until each one matches."""
@@ -125,6 +126,10 @@ class Rig:
         info.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         info.p = [fx, 0.0, CX, 0.0, 0.0, fx, CY, 0.0, 0.0, 0.0, 1.0, 0.0]
         self.send(self.camera_info, info)
+        # The ack means the message is queued, not that its callback ran. The node's
+        # single-threaded executor serves the detections and depth subscriptions first, so a
+        # frame sent right after would be dropped for want of camera_info. The node signals
+        # nothing to wait on.
         time.sleep(0.1)
 
     def publish_frame(self, seconds, people, encoding="32FC1", depth_offset_s=0.0, paint_z=None):

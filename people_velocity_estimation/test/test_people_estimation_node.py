@@ -77,12 +77,7 @@ def depth_image(detections, depths_m, header, encoding):
         # Clamped, as a negative start would wrap around the image.
         top = max(top + (bottom - top) // 4, 0)
         depth_m[top : bottom + 1, max(left, 0) : right + 1] = z
-    if encoding == "16UC1":
-        image = (depth_m * 1000.0).astype(np.uint16)
-    elif encoding == "bgr8":
-        image = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
-    else:
-        image = depth_m
+    image = (depth_m * 1000.0).astype(np.uint16) if encoding == "16UC1" else depth_m
     message = CvBridge().cv2_to_imgmsg(image, encoding=encoding)
     message.header = header
     return message
@@ -132,15 +127,14 @@ class Rig:
         # nothing to wait on.
         time.sleep(0.1)
 
-    def publish_frame(self, seconds, people, encoding="32FC1", depth_offset_s=0.0, paint_z=None):
+    def publish_frame(self, seconds, people, encoding="32FC1"):
         """Publish one frame of ``Sighting`` field tuples."""
         sightings = [Sighting(*person) for person in people]
         header = Header(frame_id=CAMERA_FRAME, stamp=stamp(seconds))
         detections = [detection(sighting) for sighting in sightings]
         self.send(self.detections, PersonDetections(header=header, detections=detections))
-        depth_header = Header(frame_id=CAMERA_FRAME, stamp=stamp(seconds + depth_offset_s))
-        depths_m = [sighting.z if paint_z is None else paint_z for sighting in sightings]
-        self.send(self.depth, depth_image(detections, depths_m, depth_header, encoding))
+        depths_m = [sighting.z for sighting in sightings]
+        self.send(self.depth, depth_image(detections, depths_m, header, encoding))
 
     def published(self, seconds):
         """Whether People were received for the frame at ``seconds``."""
